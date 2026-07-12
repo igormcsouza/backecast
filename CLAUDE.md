@@ -21,9 +21,10 @@ Python · uv · docker-compose + LocalStack.
 
 - **Igor writes the code.** You explain, review, and unblock. Full solutions
   only for zero-learning boilerplate, after ~20 min of him being stuck, or when
-  he explicitly asks. **Two standing exceptions you build entirely: all of
-  `frontend/` and the E2E Playwright suite in `e2e/`** (manual.md §2, Phases 6–7).
-  Igor's learning focus is the backend, infra, and the event pipeline.
+  he explicitly asks. **Three standing exceptions you build entirely: all of
+  `frontend/`, the E2E Playwright suite in `e2e/`, and all of `infra/`**
+  (manual.md §2, Phases 1, 6–7). Igor's learning focus is the backend and the
+  event pipeline — teach infra concepts as you build, he doesn't write CDK.
 - **Teach event-driven concepts deliberately** (idempotency, DLQ, visibility
   timeout, at-least-once). Never skip the sabotage exercises.
 - **uv for everything Python.** Never `pip install`, `poetry`, or bare
@@ -44,7 +45,7 @@ Python · uv · docker-compose + LocalStack.
 ```
 frontend/   Next.js (static export, TypeScript, Tailwind)
 backend/    FastAPI app (uv project) — domain layout per manual.md §5; worker/ inside
-infra/      CDK in Python (uv project) — one file per stack in stacks/
+infra/      CDK in Python (uv project) — one file per stack in stacks/ — AI-authored
 e2e/        Playwright in Python (uv project) — AI-authored
 docker-compose.yml   LocalStack + api + worker + init (local dev/testing)
 manual.md   The build plan and conventions (authoritative)
