@@ -1,0 +1,26 @@
+services:
+  localstack:
+    image: localstack/localstack:3
+    ports:
+      - "4566:4566"
+    environment:
+      - SERVICES=s3,sqs,dynamodb
+      - DEBUG=0
+    volumes:
+      - "localstack-data:/var/lib/localstack"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  init:
+    image: localstack/localstack:3
+    entrypoint: ["/bin/bash", "-c"]
+    command: ["echo 'init placeholder — bucket/table/queue creation added in Phase 2/4'"]
+    depends_on:
+      localstack:
+        condition: service_healthy
+
+volumes:
+  localstack-data:
