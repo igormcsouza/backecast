@@ -4,6 +4,7 @@ version = "0.1.0"
 description = "Add your description here"
 requires-python = ">=3.12"
 dependencies = [
+    "aws-cdk-aws-lambda-python-alpha>=2.261.0a0",
     "aws-cdk-lib>=2.261.0",
     "constructs>=10.6.0",
 ]
@@ -13,3 +14,6 @@ dev = [
     "pytest>=9.1.1",
     "ruff>=0.15.21",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
