@@ -14,6 +14,8 @@ def synth_template() -> Template:
         stage="dev",
         table=data_stack.table,
         bucket=data_stack.media_bucket,
+        openai_api_key_param=data_stack.openai_api_key_param,
+        llm_api_key_param=data_stack.llm_api_key_param,
     )
     return Template.from_stack(pipeline_stack)
 
@@ -34,25 +36,24 @@ def test_main_queue_has_redrive_policy_to_dlq_with_max_receive_count_3():
 
 def test_main_queue_visibility_timeout_is_six_times_worker_timeout():
     template = synth_template()
-    # WORKER_TIMEOUT is 30s in pipeline_stack.py; visibility must be 6x that.
+    # WORKER_TIMEOUT is 5 minutes (300s) in pipeline_stack.py — Phase 5's
+    # callback to the Phase 4 6x rule: visibility must scale with it.
     template.has_resource_properties(
         "AWS::SQS::Queue",
-        Match.object_like({"VisibilityTimeout": 180}),
+        Match.object_like({"VisibilityTimeout": 1800}),
     )
 
 
-def test_creates_worker_lambda_with_python312_runtime():
-    # Not a resource_count_is(1): the S3 bucket notification wiring also
-    # provisions its own tiny custom-resource Lambda (the
-    # BucketNotificationsHandler) alongside the worker function — this
-    # asserts the *worker's* shape specifically, ignoring how many other
-    # Lambdas CDK's L2 constructs add behind the scenes.
+def test_creates_worker_lambda_as_a_container_image_with_five_minute_timeout():
+    # Phase 5: the worker ships as a container image (ffmpeg bundled in),
+    # not a zip — PackageType=Image with no Handler/Runtime is exactly what
+    # DockerImageFunction synthesizes to.
     template = synth_template()
     template.has_resource_properties(
         "AWS::Lambda::Function",
         {
-            "Runtime": "python3.12",
-            "Handler": "worker.handler.handler",
+            "PackageType": "Image",
+            "Timeout": 300,
         },
     )
 
@@ -78,6 +79,55 @@ def test_worker_lambda_can_read_and_write_the_table():
             }
         },
     )
+
+
+def test_worker_lambda_can_read_uploads_and_write_transcripts():
+    # Scoped grants (objects_key_pattern), not a blanket grant_read_write on
+    # the whole bucket — the worker only ever touches uploads/ (read) and
+    # transcripts/ (write).
+    template = synth_template()
+    template.has_resource_properties(
+        "AWS::IAM::Policy",
+        {
+            "PolicyDocument": {
+                "Statement": Match.array_with(
+                    [
+                        Match.object_like(
+                            {
+                                "Action": Match.array_with(["s3:GetObject*"]),
+                                "Effect": "Allow",
+                                "Resource": Match.any_value(),
+                            }
+                        ),
+                        Match.object_like(
+                            {
+                                "Action": Match.array_with(["s3:PutObject"]),
+                                "Effect": "Allow",
+                            }
+                        ),
+                    ]
+                )
+            }
+        },
+    )
+
+
+def test_worker_lambda_can_read_the_openai_and_llm_api_key_params():
+    # SSM parameters themselves live in DataStack (see test_data_stack.py);
+    # this asserts PipelineStack's own IAM policy grants GetParameter on
+    # both — openai_api_key_param.grant_read() and
+    # llm_api_key_param.grant_read() each add their own statement to the
+    # worker role's single combined policy.
+    template = synth_template()
+    policies = template.find_resources("AWS::IAM::Policy")
+    statements = [
+        stmt
+        for policy in policies.values()
+        for stmt in policy["Properties"]["PolicyDocument"]["Statement"]
+        if "ssm:GetParameter" in (stmt.get("Action") or [])
+    ]
+    # One statement per grant_read() call — openai key, llm key.
+    assert len(statements) == 2
 
 
 def test_event_source_mapping_enables_report_batch_item_failures():

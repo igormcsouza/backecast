@@ -43,6 +43,23 @@ else
     --value "local-dev-admin-key" --region "$REGION"
 fi
 
+# Phase 5: the worker's OpenAI/LLM API key params. With AI_STUB=1 (compose's
+# default) these are never actually read — worker/transcription.py and
+# worker/metadata.py short-circuit before hitting SSM — but they're seeded
+# anyway so flipping AI_STUB off locally against LocalStack fails on a real
+# "bad credentials" error from the provider, not a confusing "parameter not
+# found". Placeholder values only; never a real key.
+OPENAI_API_KEY_PARAM="/backecast/dev/openai-api-key"
+LLM_API_KEY_PARAM="/backecast/dev/llm-api-key"
+for param in "$OPENAI_API_KEY_PARAM" "$LLM_API_KEY_PARAM"; do
+  if awslocal ssm get-parameter --name "$param" --region "$REGION" >/dev/null 2>&1; then
+    echo "param $param already exists, skipping"
+  else
+    awslocal ssm put-parameter --name "$param" --type String \
+      --value "local-stub-key-not-a-real-secret" --region "$REGION"
+  fi
+done
+
 DLQ_NAME="backecast-dev-media-dlq"
 QUEUE_NAME="backecast-dev-media-queue"
 
@@ -51,7 +68,10 @@ QUEUE_NAME="backecast-dev-media-queue"
 # for why 6x. Kept as a literal here rather than derived because this script
 # has no Python/CDK context to import it from; if you change one, change
 # the other. maxReceiveCount likewise mirrors MAX_RECEIVE_COUNT there.
-VISIBILITY_TIMEOUT="180"
+# Phase 5 raised the worker timeout from 30s to 5 minutes (ffmpeg +
+# transcription + an LLM call, all in one synchronous invocation) — this
+# value is that same callback, now 1800s (30 min) = 6 x 300s.
+VISIBILITY_TIMEOUT="1800"
 MAX_RECEIVE_COUNT="3"
 
 if awslocal sqs get-queue-url --queue-name "$DLQ_NAME" --region "$REGION" >/dev/null 2>&1; then

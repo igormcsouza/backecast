@@ -3,8 +3,15 @@
 Cost note (CLAUDE.md guardrail): SQS and Lambda are both pay-per-use with a
 generous perpetual free tier (1M SQS requests/month, 1M Lambda
 requests + 400,000 GB-seconds/month) — nothing here has an always-on hourly
-charge, so nothing in this stack needs approval beyond the usual "state the
-cost" rule, and there's nothing to state: at this project's volume it's $0.
+charge, so provisioning this stack itself needs no approval beyond the usual
+"state the cost" rule. What Phase 5 adds that *does* cost real money per
+invocation is the worker's own OpenAI/LLM calls (~$0.003/min of audio
+transcribed, ~$0.18/hour-long episode, plus a small per-episode LLM token
+cost for metadata generation) — see worker/transcription.py and
+worker/metadata.py's docstrings for the numbers, and SESSIONS.md for the
+full cost writeup. Nothing in *this* CDK stack spends money on its own;
+AI_STUB=1 in docker-compose (and hard-coded in the test suite) keeps local
+dev and CI from ever placing a real API call.
 """
 
 from pathlib import Path
@@ -16,18 +23,23 @@ from aws_cdk import aws_lambda_event_sources as lambda_event_sources
 from aws_cdk import aws_s3 as s3
 from aws_cdk import aws_s3_notifications as s3n
 from aws_cdk import aws_sqs as sqs
-from aws_cdk.aws_lambda_python_alpha import BundlingOptions, PythonFunction
+from aws_cdk import aws_ssm as ssm
 from constructs import Construct
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent.parent / "backend"
 
 # The worker Lambda's own timeout: how long ONE invocation (one batch) may
-# run. Phase 4's worker is a synchronous stub (a couple of conditional
-# DynamoDB updates), so 30s is generous headroom rather than a measured
-# budget. Phase 5 (ffmpeg + transcription + an LLM call in the same
-# invocation) will need minutes, not seconds — and per the comment below,
-# the visibility timeout must be revisited in lockstep when that happens.
-WORKER_TIMEOUT = Duration.seconds(30)
+# run. Phase 4's worker was a synchronous stub (a couple of conditional
+# DynamoDB updates) sized at 30s. Phase 5's worker does real work inside
+# that one invocation — download from S3, ffmpeg transcode, an OpenAI
+# transcription call, a LangChain metadata-generation call, another S3
+# write — all synchronously, no async job orchestration. 5 minutes is
+# generous headroom for a ~25-minute episode (the transcription-length cap
+# enforced in worker/audio.py) without being anywhere near Lambda's own
+# 15-minute hard ceiling. Per the comment below, the visibility timeout is
+# derived from this value, so raising/lowering WORKER_TIMEOUT alone keeps
+# the two in sync.
+WORKER_TIMEOUT = Duration.minutes(5)
 
 # Visibility timeout ~= 6x the worker's own timeout. The mechanism: once SQS
 # hands a message to a consumer, that message becomes invisible to every
@@ -51,8 +63,11 @@ MAX_RECEIVE_COUNT = 3
 # How many messages one worker invocation may receive at once. A larger
 # batch amortizes Lambda invocation overhead across more work but also means
 # one slow/failing message in the batch (partial failure) delays the whole
-# batch's visibility-timeout clock together — 5 is a reasonable stub-worker
-# default, revisited once Phase 5's per-message cost is known.
+# batch's visibility-timeout clock together. Phase 5's per-message cost is
+# now known (minutes of ffmpeg+OpenAI+LLM work, not milliseconds) — a batch
+# of 5 means one invocation could legitimately run close to WORKER_TIMEOUT
+# just processing sequentially, so this stays small and conservative rather
+# than being raised alongside the timeout.
 BATCH_SIZE = 5
 
 
@@ -65,6 +80,8 @@ class PipelineStack(Stack):
         stage: str,
         table: dynamodb.Table,
         bucket: s3.Bucket,
+        openai_api_key_param: ssm.IStringParameter,
+        llm_api_key_param: ssm.IStringParameter,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -91,37 +108,44 @@ class PipelineStack(Stack):
             ),
         )
 
-        worker_function = PythonFunction(
+        # DockerImageFunction, not PythonFunction/zip (unlike ApiFunction in
+        # api_stack.py) — this Lambda needs the ffmpeg/ffprobe binaries
+        # bundled into it (worker/audio.py, worker/Dockerfile explain why).
+        # Build context is BACKEND_DIR so the Dockerfile can COPY
+        # pyproject.toml/uv.lock/app/worker from there.
+        worker_function = lambda_.DockerImageFunction(
             self,
             "WorkerFunction",
-            entry=str(BACKEND_DIR),
-            index="worker/handler.py",
-            handler="handler",
-            runtime=lambda_.Runtime.PYTHON_3_12,
-            bundling=BundlingOptions(
-                asset_excludes=[
-                    ".venv",
-                    "__pycache__",
-                    ".pytest_cache",
-                    ".ruff_cache",
-                    "tests",
-                    ".git",
-                    ".dockerignore",
-                    "Dockerfile",
-                ],
+            code=lambda_.DockerImageCode.from_image_asset(
+                directory=str(BACKEND_DIR),
+                file="worker/Dockerfile",
             ),
             environment={
                 "STAGE": stage,
                 "TABLE_NAME": table.table_name,
+                "AI_STUB": "0",  # real infra: no stub. Local dev sets AI_STUB=1 in docker-compose.
+                "OPENAI_API_KEY_PARAM_NAME": openai_api_key_param.parameter_name,
+                "LLM_API_KEY_PARAM_NAME": llm_api_key_param.parameter_name,
             },
             timeout=WORKER_TIMEOUT,
-            memory_size=256,
+            # 256MB was plenty for Phase 4's stub (a couple of DynamoDB
+            # calls). ffmpeg transcoding and buffering an audio file in
+            # /tmp need real headroom; 1024MB is comfortable for a
+            # 25-minute episode without over-provisioning (Lambda cost
+            # scales with memory x duration, and this is still free-tier
+            # territory at this project's volume).
+            memory_size=1024,
         )
-        # No AI yet (Phase 4 scope) — the worker only flips a status field,
-        # so it needs table read/write and nothing else. It doesn't even
-        # need S3 access: the episode id is parsed out of the S3 object key
-        # embedded in the event message, the object itself is never read.
+        # Phase 5 needs real permissions the Phase 4 stub didn't: read the
+        # raw upload (to ffmpeg-preprocess it) and write the transcript,
+        # both scoped to their own key prefixes rather than a blanket
+        # grant_read_write on the whole bucket — the worker never needs to
+        # touch anything outside uploads/ or transcripts/.
         table.grant_read_write_data(worker_function)
+        bucket.grant_read(worker_function, objects_key_pattern="uploads/*")
+        bucket.grant_put(worker_function, objects_key_pattern="transcripts/*")
+        openai_api_key_param.grant_read(worker_function)
+        llm_api_key_param.grant_read(worker_function)
 
         # The event source mapping is what turns "messages sitting in a
         # queue" into "Lambda invocations": AWS polls the queue on our

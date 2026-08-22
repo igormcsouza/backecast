@@ -49,7 +49,8 @@ services:
   worker:
     build:
       context: ./backend
-      target: runtime
+      target: runtime  # NOT worker/Dockerfile — that one's AWS-only (see its own docstring);
+                        # locally the api/runtime image + apt-installed ffmpeg is simpler.
     command: ["python", "-m", "worker.local_poller"]
     volumes:
       - ./backend/app:/app/app
@@ -62,11 +63,22 @@ services:
       - AWS_ACCESS_KEY_ID=test
       - AWS_SECRET_ACCESS_KEY=test
       - WORKER_QUEUE_URL=http://localstack:4566/000000000000/backecast-dev-media-queue
-      # Sabotage exercise toggles (Phase 4) — both off by default. Set to
-      # "1" / a positive number, then `docker compose up -d --force-recreate
-      # worker`, to reproduce the exercises documented in SESSIONS.md.
+      - MEDIA_BUCKET_NAME=backecast-media-dev
+      # AI_STUB=1: no real OpenAI/Anthropic network call, ever, from local
+      # dev — worker.transcription / worker.metadata return canned (but
+      # really Pydantic-validated) values instead. See CLAUDE.md's
+      # Environment notes and SESSIONS.md for the real per-episode cost
+      # once this is ever flipped to 0 against real infra.
+      - AI_STUB=${AI_STUB:-1}
+      - OPENAI_API_KEY_PARAM_NAME=/backecast/dev/openai-api-key
+      - LLM_API_KEY_PARAM_NAME=/backecast/dev/llm-api-key
+      # Sabotage exercise toggles — both Phase 4's and Phase 5's, all off by
+      # default. Set to "1" / a positive number, then `docker compose up -d
+      # --force-recreate worker`, to reproduce the exercises documented in
+      # SESSIONS.md.
       - WORKER_SABOTAGE_FORCE_FAILURE=${WORKER_SABOTAGE_FORCE_FAILURE:-0}
       - WORKER_SABOTAGE_SLEEP_SECONDS=${WORKER_SABOTAGE_SLEEP_SECONDS:-0}
+      - WORKER_SABOTAGE_INVALID_METADATA=${WORKER_SABOTAGE_INVALID_METADATA:-0}
     depends_on:
       init:
         condition: service_completed_successfully

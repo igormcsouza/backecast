@@ -18,6 +18,245 @@
 
 ---
 
+## Session 6 — 2026-08-22 — Phase 5: AI transcription + LangChain metadata generation
+**Built:** the worker's Phase 4 stub middle (`processing` → sleep →
+`processed-stub`) is replaced with the real pipeline: ffmpeg preprocessing →
+OpenAI transcription → LangChain metadata chain → DynamoDB, all inside one
+synchronous worker invocation (no async job orchestration / Step
+Functions). State machine grows to
+`uploading → processing → transcribing → generating → review`, with
+`processing → rejected` as a duration-cap side exit and `→ failed` reachable
+from any in-flight state.
+- `backend/worker/audio.py` (new): ffmpeg preprocessing, two plain
+  `subprocess` calls (`ffprobe` for duration, `ffmpeg` for a 32kbps-mono
+  transcode) — no `ffmpeg-python` dependency. `probe_duration_seconds()`
+  runs *before* any transcode, so an over-length upload (>25 min, the
+  transcription-length cap) costs nothing beyond the S3 download.
+- `backend/worker/transcription.py` (new): OpenAI SDK,
+  `gpt-4o-mini-transcribe`. API key from SSM (`OPENAI_API_KEY_PARAM_NAME`),
+  fetched once and cached at module scope, same pattern as `app/core/auth.py`'s
+  admin-key cache. `AI_STUB=1` short-circuits before any SSM read or network
+  call and returns a canned transcript string.
+- `backend/worker/metadata.py` (new): the one and only LangChain usage in
+  the codebase (per CLAUDE.md's rule) — `init_chat_model(model=settings.llm_model)`
+  + `.with_structured_output(EpisodeMetadata)`. `settings.llm_model` is a
+  `"<provider>:<model>"` string (e.g. `openai:gpt-4o-mini` or
+  `anthropic:claude-3-5-haiku-latest`) — swapping providers is an env var
+  change, this file never imports a provider-specific chat-model class.
+  `AI_STUB=1` validates a canned payload through the real `EpisodeMetadata`
+  Pydantic model instead of calling an LLM. Also owns the Phase 5 sabotage
+  hook, `WORKER_SABOTAGE_INVALID_METADATA=1` (same pattern as Phase 4's
+  `WORKER_SABOTAGE_*` toggles).
+- `backend/app/episodes/schemas.py`: `EpisodeStatus` gains `TRANSCRIBING`,
+  `GENERATING`, `REVIEW`, `REJECTED`, `FAILED` (drops `PROCESSED_STUB`,
+  fully superseded). New `Resource` (`label`, `url: HttpUrl`) and
+  `EpisodeMetadata` (`title`, `description`, `resources: list[Resource]`)
+  models — `HttpUrl` is the validation the sabotage exercise leans on.
+- `backend/worker/handler.py`: `_transition()` generalized to accept
+  `extra_attributes`, so the final `generating → review` transition writes
+  title/description/resources atomically with the status change (via
+  placeholder-based expression-attribute names, `#a0`/`:v0`-style, to stay
+  reserved-word-safe for arbitrary future field names). The big
+  `if status == X` chain was split into one `_advance_*()` function per
+  stage (`_advance_uploading/_processing/_transcribing/_generating`)
+  orchestrated by `_run_pipeline()`, both to keep `ruff`'s C901 complexity
+  check happy and because each stage function is independently the unit the
+  resumability story (see Decisions) is about. Any exception, at any stage,
+  is caught once at the top (`_process_s3_record`), best-effort-transitions
+  the episode to `failed` (re-reading current status rather than trusting a
+  captured variable — see Decisions), and re-raises so the SQS message is
+  reported failed and Phase 4's retry/DLQ mechanics take over unchanged.
+- `backend/worker/Dockerfile` (new): the worker Lambda ships as a
+  **container image**, not a zip (unlike `ApiFunction`, still a
+  `PythonFunction`) — it needs the `ffmpeg`/`ffprobe` *binaries*, which
+  aren't a `uv add`-able Python package and are an awkward fit for a Lambda
+  Layer at this size. Base image `public.ecr.aws/lambda/python:3.12` +
+  a static ffmpeg build (Amazon Linux's default repos don't ship it) + `uv`
+  copied in as a binary (not `pip install uv`) to resolve/install deps.
+  Built and smoke-tested locally (`docker build`, confirmed `ffmpeg`/`ffprobe`
+  on PATH and `worker.handler.handler` importable) — not pushed anywhere.
+- `backend/Dockerfile` (the api/worker-shared local-dev image): gained
+  `apt-get install ffmpeg` so `docker compose`'s `worker` service runs the
+  *real* ffmpeg step locally too, not a mock of it — same
+  business-logic-only-exists-once philosophy as `worker/local_poller.py`.
+- `infra/stacks/pipeline_stack.py`: `WorkerFunction` is now a
+  `DockerImageFunction` (`worker/Dockerfile`, build context `backend/`),
+  `WORKER_TIMEOUT` raised 30s → 5 minutes (ffmpeg + OpenAI + an LLM call in
+  one invocation needs minutes, not seconds), which — via the existing 6×
+  derivation — raises `VISIBILITY_TIMEOUT` to 30 minutes: the Phase 4
+  lesson revisited on purpose, same formula, new inputs. Memory bumped
+  256MB → 1024MB (ffmpeg + buffering an episode in `/tmp`). New grants:
+  `bucket.grant_read(..., "uploads/*")`, `bucket.grant_put(..., "transcripts/*")`
+  (scoped to key prefixes, not a blanket read/write), plus
+  `grant_read()` on two new SSM parameters.
+- `infra/stacks/data_stack.py`: two new placeholder `StringParameter`s,
+  `/backecast/{stage}/openai-api-key` and `/backecast/{stage}/llm-api-key`
+  — same pattern as the Phase 3 admin key (Igor sets real values post-deploy
+  via `aws ssm put-parameter --overwrite`; nothing here is a real secret).
+  Two separate params, not one shared key, because the provider-swap seam
+  means the metadata-chain key can belong to a different provider than the
+  transcription key.
+- `infra/tests/test_pipeline_stack.py` / `test_data_stack.py`: updated for
+  the container-image Lambda (`PackageType=Image`, 300s timeout), the new
+  visibility timeout (1800s), the S3 read/write grants, the two new SSM
+  parameters, and the two new `ssm:GetParameter` policy statements.
+  `cdk synth --all` succeeds; not deployed to real AWS this session.
+- `backend/tests/test_worker_handler.py`: rewritten for the new terminal
+  state (`review`, not `processed-stub`) plus new cases — resuming from
+  `transcribing` (redoes ffmpeg, no local state survives a fresh
+  invocation), resuming from `generating` (re-reads the transcript from S3
+  instead), the `rejected` duration-cap path, a metadata-generation failure
+  landing on `failed`, and the sabotage case itself (below). ffmpeg/S3 are
+  monkeypatched at the handler's own helper boundary; transcription/metadata
+  are deliberately left real (AI_STUB=1 makes them free and networkless), so
+  these tests cover the actual Pydantic-validation and DynamoDB-write code,
+  not a re-implementation of it.
+- `backend/tests/test_worker_audio.py`, `test_worker_transcription.py`,
+  `test_worker_metadata.py` (new): unit coverage for the three new modules
+  in isolation — mocked `subprocess.run` for ffmpeg, mocked SSM/OpenAI
+  client for transcription, mocked `init_chat_model` for the provider-swap
+  seam, and the sabotage payload's Pydantic rejection.
+- `backend/tests/integration/test_processing_flow.py`: rewritten to poll
+  for `review`, assert the AI-generated (stubbed) title/description/resources
+  landed in DynamoDB, and assert the transcript object exists in S3. Needed
+  *real* (if tiny and silent) audio — Phase 4's `b"fake-audio-bytes"` fixture
+  doesn't survive real `ffprobe`/`ffmpeg` — so a new `tiny_audio_bytes`
+  fixture in `tests/integration/conftest.py` generates a ~1s silent mp3 via
+  ffmpeg's `lavfi` source at test time (the `api` container has ffmpeg now
+  too, for exactly this).
+- `backend/tests/conftest.py`: sets `AI_STUB=1` globally
+  (`os.environ.setdefault`) before any test module can import
+  `worker.transcription`/`worker.metadata` — belt-and-suspenders with
+  docker-compose's own `AI_STUB=1` default, so no automated test run, local
+  or CI, can ever place a real network call to OpenAI or Anthropic.
+- `docker-compose.yml` / `scripts/init-localstack.sh`: `worker` service
+  gets `AI_STUB=${AI_STUB:-1}`, the two new SSM param-name env vars, and the
+  new `WORKER_SABOTAGE_INVALID_METADATA` toggle; the init script seeds
+  placeholder values for the two new SSM parameters and updates the local
+  queue's hand-rolled `VisibilityTimeout` literal to 1800 (mirroring
+  `pipeline_stack.py`'s new derivation, per the existing "if you change one,
+  change the other" comment there).
+
+**Decisions:** resumability is coarse-grained, not fully exactly-once. Every
+`_advance_*()` stage re-derives its inputs from durable storage (S3) rather
+than trusting anything a previous, possibly-crashed invocation left in
+memory — a fresh Lambda container has an empty `/tmp`. The one deliberate
+optimization: the full transcript is written to S3 *before* the
+`transcribing → generating` transition, so a crash between those two stages
+resumes by re-reading the already-paid-for transcript instead of re-paying
+OpenAI to transcribe the same audio again. A crash *during* transcription
+itself has no such checkpoint — redelivery redoes both the ffmpeg step and
+the OpenAI call from scratch, an accepted trade-off for this MVP's state
+machine (true exactly-once cost control would need finer-grained
+checkpointing than "one durable artifact per stage boundary", e.g.
+persisting partial ffmpeg output too — not worth the complexity here). The
+best-effort `failed` transition re-reads the episode's current status from
+DynamoDB rather than trusting a status variable captured before the
+exception — every transition is durably committed *before* the next stage's
+riskier work begins, so a fresh read is always accurate regardless of where
+exactly an exception was raised, and is simpler than threading a mutable
+"last known status" through every helper. Two SSM parameters instead of one
+shared "LLM key", for the reason above. Kept `PythonFunction`/zip for
+`ApiFunction` unchanged — only the worker needs ffmpeg, so only the worker
+needs the container-image switch; splitting packaging strategy per-Lambda by
+actual need, not uniformly.
+
+### Sabotage exercise findings (factual account — for the Learned line above)
+
+Run against the real docker-compose + LocalStack stack (not a simulation),
+with `AI_STUB=1` (so no real LLM was ever involved) and the new
+`WORKER_SABOTAGE_INVALID_METADATA=1` toggle set on the `worker` service
+(`docker compose up -d --force-recreate worker`), then a real episode
+uploaded through the real API with a real (ffmpeg-generated silent) mp3.
+
+The worker ran the full chain for real up through `generating`: downloaded
+the upload, ffmpeg-transcoded it, wrote a (stubbed) transcript to S3,
+transitioned to `generating`, then called `generate_metadata()` — which,
+with the sabotage flag on, validates a payload containing
+`{"label": "Broken Resource", "url": "not-a-url"}` against the real
+`EpisodeMetadata`/`Resource` Pydantic model instead of a real LLM response.
+Pydantic rejected it immediately:
+
+```
+pydantic_core._pydantic_core.ValidationError: 1 validation error for EpisodeMetadata
+resources.0.url
+  Input should be a valid URL, relative URL without a base [type=url_parsing, input_value='not-a-url', input_type=str]
+```
+
+The exception propagated up through `_advance_generating` → `_run_pipeline`
+→ `_process_s3_record`'s `except Exception` handler, which re-read the
+episode's current status (`generating`), fired the conditional
+`generating → failed` transition, and re-raised. The handler reported the
+SQS message as a batch item failure; the episode's final DynamoDB state was
+`status=failed` with `title`/`description`/`resources` left empty — no
+malformed URL, no partial garbage, ever reached a persisted field. With the
+queue's real `maxReceiveCount=3`, the same message would be retried twice
+more (same deterministic validation failure each time) before landing in
+the DLQ, exactly as Phase 4's exercise #1 already proved for a different
+kind of forced failure.
+
+**Trade-off discussion — retry-with-feedback vs. fail-to-DLQ:** fail-to-DLQ
+(what's implemented) is "free" — it's the exact same mechanism Phase 4
+already built for any other worker failure, requires no new code, and
+guarantees a human eventually sees *why* an episode got stuck (the DLQ's
+whole purpose). Its cost is that a genuinely bad LLM response burns a full
+transcription's worth of API cost (already spent, transcription happens
+before generation) and produces zero forward progress — the episode just
+sits in the DLQ until a human intervenes, even though the failure might be
+trivially fixable by asking the model to try again. Retry-with-feedback (not
+implemented) — catching the `ValidationError`, re-invoking the chain with
+the error message appended to the prompt ("your last response had this
+validation error, fix it and try again") — would recover automatically from
+a large class of LLM mistakes (a model that's 95% right and just formatted
+one field wrong) without ever reaching the DLQ, at the cost of: a second LLM
+call's worth of money and latency per retry, a bound needed on how many
+times to retry before giving up anyway (or it just becomes a slower path to
+the same DLQ), and meaningfully more code (the chain needs to accept
+"previous attempt + error" as input, not just the transcript). For this
+MVP, at this volume, fail-to-DLQ is the right default: a bad metadata
+generation is rare enough that a human re-triggering the pipeline
+(re-uploading, or a future "retry" admin action) costs less than building
+and maintaining a bounded-retry-with-feedback loop. Revisit
+retry-with-feedback if malformed structured output turns out to be common
+enough in practice that a human is spending real time babysitting the DLQ
+for it.
+
+### Cost
+
+**Transcription** (OpenAI `gpt-4o-mini-transcribe`): ≈$0.003/minute of
+audio, i.e. **≈$0.18 for a full hour-long episode** — the CLAUDE.md-mandated
+number, unchanged from the plan. `gpt-4o-transcribe` (the higher-quality
+sibling) is roughly 2x that, a straightforward upgrade path
+(`worker/transcription.py::TRANSCRIBE_MODEL`) if transcript quality ever
+becomes the bottleneck. **Metadata generation** (LangChain +
+`gpt-4o-mini`): a full transcript is roughly 4,000-6,000 tokens for a
+25-minute episode, plus a short prompt and a small structured JSON response
+— on the order of a few thousand input tokens and a few hundred output
+tokens per episode, which at `gpt-4o-mini`'s per-token pricing is a small
+fraction of a cent per episode — negligible next to the transcription cost,
+but worth naming explicitly. **Neither of these numbers was spent this
+session** — `AI_STUB=1` was on for every local run, every automated test,
+and the sabotage exercise; this task never held or used a real OpenAI/
+Anthropic key. Both figures matter only once Igor sets the real SSM
+parameter values and flips a deployed worker's `AI_STUB` to `0`.
+
+**Open questions:** none.
+
+**Next step:** start Phase 6 — Frontend (AI-built), per manual.md. Broad
+shape: a Next.js static-export admin view (upload form hitting
+`POST /api/v1/episodes` + the presigned S3 POST, an admin-key-gated review
+queue for episodes sitting in `status=review` — the human-in-the-loop step
+this pipeline has been building toward, letting a person approve/edit the
+AI-generated title/description/resources before publish) and a public
+streaming page listing `status=published` episodes (a status this project
+hasn't introduced yet — Phase 6 likely adds `EpisodeStatus.PUBLISHED` and
+the API action that sets it, alongside the frontend that triggers it).
+Deployed via GitHub Pages per the Session-3-era decision recorded above
+Session 5. Read manual.md's own Phase 6 section for the authoritative scope
+before starting.
+
+---
+
 ## Session 5 — 2026-08-22 — Phase 4: The event pipeline (S3 → SQS → worker Lambda)
 **Built:** S3 (`uploads/` prefix) → SQS queue → worker Lambda → DLQ, wired
 both in CDK (for AWS) and docker-compose/LocalStack (for local dev). No AI —

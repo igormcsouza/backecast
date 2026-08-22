@@ -27,6 +27,8 @@ PipelineStack(
     stage=stage,
     table=data_stack.table,
     bucket=data_stack.media_bucket,
+    openai_api_key_param=data_stack.openai_api_key_param,
+    llm_api_key_param=data_stack.llm_api_key_param,
     env=env,
 )
 
