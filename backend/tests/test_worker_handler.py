@@ -51,6 +51,20 @@ class FakeTable:
         item["status"] = ExpressionAttributeValues[":to"]
         item["updated_at"] = ExpressionAttributeValues[":now"]
 
+    def get_item(
+        self,
+        *,
+        Key,
+        ProjectionExpression,
+        ExpressionAttributeNames,
+        ConsistentRead=True,
+    ):
+        pk = Key["PK"]
+        item = self.items.get(pk)
+        if item is None:
+            return {}
+        return {"Item": {"status": item["status"]}}
+
 
 @pytest.fixture(autouse=True)
 def reset_sabotage_flags(monkeypatch):
@@ -156,6 +170,21 @@ def test_partial_batch_failure_only_reports_the_failing_message(
     assert result == {"batchItemFailures": [{"itemIdentifier": "m-bad"}]}
     assert fake_table.items[f"EPISODE#{good_id}"]["status"] == "processed-stub"
     assert fake_table.items[f"EPISODE#{bad_id}"]["status"] == "uploading"
+
+
+def test_resumes_from_processing_after_crash_between_transitions(fake_table):
+    """A prior delivery crashed after moving uploading->processing but before
+    processing->processed-stub (e.g. a worker timeout mid-sleep). Redelivery
+    must resume from `processing`, not treat it as already-done and get stuck.
+    """
+    episode_id = "resume1"
+    fake_table.items[f"EPISODE#{episode_id}"] = {"status": "processing"}
+    body = _s3_event_body("bucket", f"uploads/{episode_id}.mp3")
+
+    result = worker_handler.handler({"Records": [_sqs_record("m1", body)]})
+
+    assert result == {"batchItemFailures": []}
+    assert fake_table.items[f"EPISODE#{episode_id}"]["status"] == "processed-stub"
 
 
 def test_s3_test_event_is_ignored(fake_table):

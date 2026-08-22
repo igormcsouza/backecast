@@ -144,6 +144,18 @@ def _transition(
     return True
 
 
+def _current_status(episode_id: str) -> str | None:
+    """Consistent read of the episode's status, or None if the item doesn't exist."""
+    resp = _table.get_item(
+        Key={"PK": f"EPISODE#{episode_id}", "SK": f"EPISODE#{episode_id}"},
+        ProjectionExpression="#status",
+        ExpressionAttributeNames={"#status": "status"},
+        ConsistentRead=True,
+    )
+    item = resp.get("Item")
+    return item["status"] if item else None
+
+
 def _process_s3_record(s3_record: dict) -> None:
     bucket = s3_record["s3"]["bucket"]["name"]
     key = unquote_plus(s3_record["s3"]["object"]["key"])
@@ -163,24 +175,50 @@ def _process_s3_record(s3_record: dict) -> None:
             "to observe SQS retry -> DLQ behavior"
         )
 
-    moved = _transition(episode_id, EpisodeStatus.UPLOADING, EpisodeStatus.PROCESSING)
-    if not moved:
-        # Either a duplicate delivery of a message already processed, or the
-        # item is in some other state entirely — nothing further to do.
-        # This is the idempotency guard exercised directly by sabotage #2
-        # (duplicate delivery under a too-short visibility timeout) and
-        # sabotage #3 (the same file uploaded/processed twice).
+    # Redelivery can land here at any point in the state machine — not just
+    # before the first transition. If a prior attempt crashed/timed out
+    # *between* the two transitions (e.g. mid-`SABOTAGE_SLEEP_SECONDS`, or a
+    # real transcription timeout in Phase 5), the item is left sitting in
+    # `processing`. A naive "try the first transition, bail if it fails"
+    # guard would treat that as "already done" and leave it stuck forever.
+    # So: look at where the item actually is, and resume from there, instead
+    # of assuming redelivery always means "start of the day zero".
+    status = _current_status(episode_id)
+    if status is None:
+        logger.warning("episode item not found", extra={"episode_id": episode_id})
         return
 
-    if SABOTAGE_SLEEP_SECONDS > 0:
-        logger.warning(
-            "sabotage: sleeping to simulate slow processing",
-            extra={"episode_id": episode_id, "seconds": SABOTAGE_SLEEP_SECONDS},
+    if status == EpisodeStatus.UPLOADING.value:
+        moved = _transition(
+            episode_id, EpisodeStatus.UPLOADING, EpisodeStatus.PROCESSING
         )
-        time.sleep(SABOTAGE_SLEEP_SECONDS)
+        if not moved:
+            # Lost a race with a concurrent delivery of the same message —
+            # it already advanced the item past `uploading`. Re-check where
+            # it landed instead of giving up, same resume logic as below.
+            status = _current_status(episode_id)
+        else:
+            status = EpisodeStatus.PROCESSING.value
 
-    _transition(episode_id, EpisodeStatus.PROCESSING, EpisodeStatus.PROCESSED_STUB)
-    logger.info("processing complete", extra={"episode_id": episode_id})
+    if status == EpisodeStatus.PROCESSING.value:
+        if SABOTAGE_SLEEP_SECONDS > 0:
+            logger.warning(
+                "sabotage: sleeping to simulate slow processing",
+                extra={"episode_id": episode_id, "seconds": SABOTAGE_SLEEP_SECONDS},
+            )
+            time.sleep(SABOTAGE_SLEEP_SECONDS)
+
+        _transition(episode_id, EpisodeStatus.PROCESSING, EpisodeStatus.PROCESSED_STUB)
+        logger.info("processing complete", extra={"episode_id": episode_id})
+        return
+
+    # Anything else (already `processed-stub`, or a status this worker
+    # doesn't own) — a duplicate delivery of a fully-completed message, or
+    # sabotage #3 (same file processed twice). Safe no-op either way.
+    logger.info(
+        "transition skipped (idempotency guard)",
+        extra={"episode_id": episode_id, "status": status},
+    )
 
 
 def _process_message_body(body: str) -> None:
