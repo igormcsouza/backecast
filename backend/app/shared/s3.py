@@ -50,3 +50,29 @@ async def create_presigned_post(
     return await run_in_threadpool(
         _build_presigned_post, bucket, key, content_type, max_bytes
     )
+
+
+def _build_presigned_get(bucket: str, key: str, expires_in: int) -> str:
+    return _s3_client.generate_presigned_url(
+        "get_object",
+        Params={"Bucket": bucket, "Key": key},
+        ExpiresIn=expires_in,
+    )
+
+
+async def create_presigned_get(bucket: str, key: str, expires_in: int = 3600) -> str:
+    """Presigned GET for streaming an episode's audio (Phase 6).
+
+    Chosen over standing up a CloudFront distribution in front of the media
+    bucket: no new billable resource, reuses this module's existing
+    presigning pattern (now for GET instead of POST), and a presigned S3 URL
+    already serves byte-range requests — the thing that actually makes
+    HTML5 `<audio>` seeking work — with no extra configuration. The
+    trade-off (documented in SESSIONS.md) is that the URL expires
+    (`expires_in`, default 1h) and isn't cached at the edge, both fine for
+    this MVP's traffic. Same `run_in_threadpool` treatment as
+    `create_presigned_post`: local crypto/URL construction, not network
+    I/O, but still a blocking boto3 call that must not run inline inside an
+    `async def`.
+    """
+    return await run_in_threadpool(_build_presigned_get, bucket, key, expires_in)

@@ -5,17 +5,26 @@ from uuid import uuid4
 from fastapi import Depends
 
 from app.core.settings import Settings, get_settings
-from app.episodes.exceptions import UnsupportedMediaTypeError
+from app.episodes.exceptions import (
+    EpisodeNotEditableError,
+    EpisodeNotFoundError,
+    UnsupportedMediaTypeError,
+)
 from app.episodes.repository import get_episodes_repository
 from app.episodes.schemas import (
     CreateEpisodeRequest,
     CreateEpisodeResponse,
     EpisodeStatus,
     GetEpisodeSchema,
+    PaginatedEpisodesResponse,
     PresignedPostSchema,
+    UpdateEpisodeRequest,
 )
 from app.shared.abstracts import RepositoryAbstract
-from app.shared.s3 import create_presigned_post
+from app.shared.s3 import create_presigned_get, create_presigned_post
+
+DEFAULT_PAGE_SIZE = 10
+MAX_PAGE_SIZE = 50
 
 
 class EpisodesService:
@@ -23,9 +32,102 @@ class EpisodesService:
         self._repository = repository
         self._settings = settings
 
-    async def list_episodes(self) -> list[GetEpisodeSchema]:
-        items = await self._repository.list()
+    async def _with_audio_url(self, item: dict) -> dict:
+        """Swap the raw `audio_key` for a time-limited presigned GET URL
+        the browser can stream (and seek — S3 honors Range requests on a
+        presigned GET) directly from. Done per-request rather than stored,
+        since a stored URL would just go stale."""
+        audio_key = item.get("audio_key")
+        if not audio_key:
+            return item
+        item = dict(item)
+        item["audio_url"] = await create_presigned_get(
+            bucket=self._settings.media_bucket_name, key=audio_key
+        )
+        return item
+
+    async def list_public_episodes(
+        self, limit: int, cursor: str | None
+    ) -> PaginatedEpisodesResponse:
+        """`GET /episodes` — public, `status=published` only. See
+        EpisodesRepository.list_published_page for the pagination/cursor
+        design."""
+        items, next_cursor = await self._repository.list_published_page(limit, cursor)
+        items = [await self._with_audio_url(item) for item in items]
+        return PaginatedEpisodesResponse(
+            items=[GetEpisodeSchema.model_validate(item) for item in items],
+            cursor=next_cursor,
+        )
+
+    async def get_public_episode(self, episode_id: str) -> GetEpisodeSchema:
+        """`GET /episodes/{id}` — public. 404s for a missing id *and* for
+        one that exists but isn't published yet, so this route can never
+        be used to confirm an unpublished episode's existence."""
+        item = await self._repository.get(episode_id)
+        if item is None or item.get("status") != EpisodeStatus.PUBLISHED.value:
+            raise EpisodeNotFoundError()
+        item = await self._with_audio_url(item)
+        return GetEpisodeSchema.model_validate(item)
+
+    async def list_admin_episodes(
+        self, status: EpisodeStatus | None
+    ) -> list[GetEpisodeSchema]:
+        """`GET /episodes/admin` — admin-only. `?status=review` is the
+        review-queue view; no filter lists every episode regardless of
+        status."""
+        if status is not None:
+            items = await self._repository.list_by_status(status.value)
+        else:
+            items = await self._repository.list()
         return [GetEpisodeSchema.model_validate(item) for item in items]
+
+    async def get_admin_episode(self, episode_id: str) -> GetEpisodeSchema:
+        """`GET /episodes/{id}/admin` — admin-only, any status. Used both
+        for the post-upload status-polling view and the review/edit view."""
+        item = await self._repository.get(episode_id)
+        if item is None:
+            raise EpisodeNotFoundError()
+        item = await self._with_audio_url(item)
+        return GetEpisodeSchema.model_validate(item)
+
+    async def update_episode(
+        self, episode_id: str, payload: UpdateEpisodeRequest
+    ) -> GetEpisodeSchema:
+        """`PATCH /episodes/{id}` — admin-only, review-edit metadata.
+        Only allowed while `status=review`: editing already-published (or
+        still in-flight) episodes isn't a flow this MVP supports."""
+        item = await self._repository.get(episode_id)
+        if item is None:
+            raise EpisodeNotFoundError()
+        if item.get("status") != EpisodeStatus.REVIEW.value:
+            raise EpisodeNotEditableError()
+
+        fields: dict = {}
+        if payload.title is not None:
+            fields["title"] = payload.title
+        if payload.description is not None:
+            fields["description"] = payload.description
+        if payload.resources is not None:
+            fields["resources"] = [
+                resource.model_dump(mode="json") for resource in payload.resources
+            ]
+
+        if not fields:
+            return GetEpisodeSchema.model_validate(item)
+
+        updated = await self._repository.update(episode_id, fields)
+        return GetEpisodeSchema.model_validate(updated)
+
+    async def publish_episode(self, episode_id: str) -> GetEpisodeSchema:
+        """`POST /episodes/{id}/publish` — admin-only, `review -> published`.
+        A missing episode is a 404; an episode that exists but isn't
+        `review` surfaces as a 409 from the repository's conditional write
+        (EpisodeNotPublishableError)."""
+        item = await self._repository.get(episode_id)
+        if item is None:
+            raise EpisodeNotFoundError()
+        updated = await self._repository.publish(episode_id)
+        return GetEpisodeSchema.model_validate(updated)
 
     async def create_episode(
         self, payload: CreateEpisodeRequest
