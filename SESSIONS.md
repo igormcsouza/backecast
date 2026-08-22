@@ -137,7 +137,20 @@ from any in-flight state.
   `pipeline_stack.py`'s new derivation, per the existing "if you change one,
   change the other" comment there).
 
-**Decisions:** resumability is coarse-grained, not fully exactly-once. Every
+**Decisions:** post-merge code review (Igor's request, before Phase 6 starts)
+found and fixed three real bugs on top of the build described below: (1)
+`BATCH_SIZE=5` with `WORKER_TIMEOUT=5min` meant a batch could legitimately
+need ~25 minutes processed sequentially while the Lambda itself got killed
+at 5 — batch size dropped to 1 so the worker timeout bounds a single
+invocation's worst case exactly; (2) losing the `processing → transcribing`
+idempotency race left the loser's ffmpeg-compressed file leaked in `/tmp`
+across warm-container reuse — now cleaned up immediately on a lost race;
+(3) a duration-cap failure hit on a *resumed* `transcribing` stage (no local
+file, redoing the ffmpeg step) fell through to `failed` instead of
+`rejected` like the first-pass check — now caught the same way on both
+paths. See commit `6c0e33c`.
+
+resumability is coarse-grained, not fully exactly-once. Every
 `_advance_*()` stage re-derives its inputs from durable storage (S3) rather
 than trusting anything a previous, possibly-crashed invocation left in
 memory — a fresh Lambda container has an empty `/tmp`. The one deliberate
