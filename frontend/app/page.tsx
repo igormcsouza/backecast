@@ -61,7 +61,7 @@ export default function HomePage() {
       {loading && <p className="text-sm text-zinc-500">Loading episodes…</p>}
       {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
 
-      {!loading && !error && episodes.length === 0 && (
+      {!loading && !error && episodes.length === 0 && !cursor && (
         <p className="text-sm text-zinc-500">
           No episodes published yet — check back soon.
         </p>

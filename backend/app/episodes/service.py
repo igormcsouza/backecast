@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -53,7 +54,9 @@ class EpisodesService:
         EpisodesRepository.list_published_page for the pagination/cursor
         design."""
         items, next_cursor = await self._repository.list_published_page(limit, cursor)
-        items = [await self._with_audio_url(item) for item in items]
+        # Independent per-item presigns — run concurrently rather than
+        # paying `limit` sequential round-trips.
+        items = list(await asyncio.gather(*(self._with_audio_url(i) for i in items)))
         return PaginatedEpisodesResponse(
             items=[GetEpisodeSchema.model_validate(item) for item in items],
             cursor=next_cursor,
@@ -115,7 +118,12 @@ class EpisodesService:
         if not fields:
             return GetEpisodeSchema.model_validate(item)
 
-        updated = await self._repository.update(episode_id, fields)
+        # `expected_status` closes the check-then-act race between the read
+        # above and this write: the repository's conditional write is the
+        # real guard, this early check is just a friendlier fast path.
+        updated = await self._repository.update(
+            episode_id, fields, expected_status=EpisodeStatus.REVIEW.value
+        )
         return GetEpisodeSchema.model_validate(updated)
 
     async def publish_episode(self, episode_id: str) -> GetEpisodeSchema:

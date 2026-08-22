@@ -24,6 +24,7 @@ from fastapi import Depends
 
 from app.episodes.exceptions import (
     EpisodeAlreadyExistsError,
+    EpisodeNotEditableError,
     EpisodeNotPublishableError,
 )
 from app.episodes.schemas import EpisodeStatus
@@ -131,7 +132,9 @@ class EpisodesRepository(RepositoryAbstract):
             raise EpisodeAlreadyExistsError() from e
         return item
 
-    async def update(self, episode_id: str, fields: dict) -> dict:
+    async def update(
+        self, episode_id: str, fields: dict, *, expected_status: str | None = None
+    ) -> dict:
         """Partial update (the `PATCH /episodes/{id}` review-edit path).
 
         Builds a `SET` expression from whatever `fields` the caller passes
@@ -141,6 +144,14 @@ class EpisodesRepository(RepositoryAbstract):
         here too since `status` (among others) is a DynamoDB reserved word.
         Always stamps `updated_at`, mirroring every other write path in
         this table.
+
+        `expected_status`, when given, adds the same conditional-write
+        guard `publish()` uses: without it, a caller-side "is this episode
+        still `review`?" check and this write are two separate round-trips,
+        leaving a race where the status changes in between (e.g. a
+        concurrent Publish) and this update silently overwrites metadata on
+        an episode no longer in the editable state. The condition makes
+        that race fail loudly instead.
         """
         now = datetime.now(UTC).isoformat()
         set_clauses = ["updated_at = :now"]
@@ -152,13 +163,25 @@ class EpisodesRepository(RepositoryAbstract):
             values[value_placeholder] = value
             set_clauses.append(f"{name_placeholder} = {value_placeholder}")
 
-        response = await self._table.update_item(
-            Key={"PK": f"EPISODE#{episode_id}", "SK": f"EPISODE#{episode_id}"},
-            UpdateExpression="SET " + ", ".join(set_clauses),
-            ExpressionAttributeNames=names,
-            ExpressionAttributeValues=values,
-            ReturnValues="ALL_NEW",
-        )
+        kwargs: dict[str, Any] = {
+            "Key": {"PK": f"EPISODE#{episode_id}", "SK": f"EPISODE#{episode_id}"},
+            "UpdateExpression": "SET " + ", ".join(set_clauses),
+            "ExpressionAttributeNames": names,
+            "ExpressionAttributeValues": values,
+            "ReturnValues": "ALL_NEW",
+        }
+        if expected_status is not None:
+            kwargs["ConditionExpression"] = "#status = :expected_status"
+            kwargs["ExpressionAttributeNames"] = {**names, "#status": "status"}
+            kwargs["ExpressionAttributeValues"] = {
+                **values,
+                ":expected_status": expected_status,
+            }
+
+        try:
+            response = await self._table.update_item(**kwargs)
+        except self._table.meta.client.exceptions.ConditionalCheckFailedException as e:
+            raise EpisodeNotEditableError() from e
         return response["Attributes"]
 
     async def publish(self, episode_id: str) -> dict:

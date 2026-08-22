@@ -150,11 +150,7 @@ function AdminDashboard({
         </button>
       </div>
 
-      <UploadForm
-        adminKey={adminKey}
-        onUploadStarted={setActiveUploadId}
-        onProcessingDone={refreshQueue}
-      />
+      <UploadForm adminKey={adminKey} onUploadStarted={setActiveUploadId} />
 
       {activeUploadId && (
         <UploadStatus
@@ -197,11 +193,9 @@ function AdminDashboard({
 function UploadForm({
   adminKey,
   onUploadStarted,
-  onProcessingDone,
 }: {
   adminKey: string;
   onUploadStarted: (episodeId: string) => void;
-  onProcessingDone: () => void;
 }) {
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -233,9 +227,6 @@ function UploadForm({
       setError(err instanceof ApiError ? err.message : "Upload failed.");
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = "";
-      // onProcessingDone is invoked by <UploadStatus> once the pipeline
-      // reaches a terminal state, not here — this just clears the input.
-      void onProcessingDone;
     }
   }
 
