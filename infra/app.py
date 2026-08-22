@@ -3,6 +3,7 @@ import aws_cdk as cdk
 
 from stacks.api_stack import ApiStack
 from stacks.data_stack import DataStack
+from stacks.pipeline_stack import PipelineStack
 
 app = cdk.App()
 
@@ -18,6 +19,14 @@ ApiStack(
     table=data_stack.table,
     bucket=data_stack.media_bucket,
     admin_key_param=data_stack.admin_key_param,
+    env=env,
+)
+PipelineStack(
+    app,
+    f"Backecast-{stage}-Pipeline",
+    stage=stage,
+    table=data_stack.table,
+    bucket=data_stack.media_bucket,
     env=env,
 )
 

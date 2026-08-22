@@ -8,13 +8,16 @@ from pydantic import BaseModel, ConfigDict
 class EpisodeStatus(str, Enum):
     """Lifecycle states an episode item moves through.
 
-    Only UPLOADING exists as of Phase 3 — later phases (event pipeline, AI
-    metadata generation, publishing) add PROCESSING, PROCESSED, REJECTED,
-    FAILED, PUBLISHED. Declared as a str-enum now so schemas are typed while
-    the value stored in DynamoDB stays a plain string.
+    UPLOADING (Phase 3) -> PROCESSING -> PROCESSED_STUB (Phase 4 — the
+    worker just proves the S3 -> SQS -> worker wiring end to end; no AI
+    yet). Later phases (AI metadata generation, publishing) add REJECTED,
+    FAILED, REVIEW, PUBLISHED. Declared as a str-enum now so schemas are
+    typed while the value stored in DynamoDB stays a plain string.
     """
 
     UPLOADING = "uploading"
+    PROCESSING = "processing"
+    PROCESSED_STUB = "processed-stub"
 
 
 class GetEpisodeSchema(BaseModel):

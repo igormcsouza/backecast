@@ -46,5 +46,30 @@ services:
       init:
         condition: service_completed_successfully
 
+  worker:
+    build:
+      context: ./backend
+      target: runtime
+    command: ["python", "-m", "worker.local_poller"]
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/worker:/app/worker
+    environment:
+      - STAGE=dev
+      - TABLE_NAME=backecast-dev
+      - AWS_REGION=sa-east-1
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - WORKER_QUEUE_URL=http://localstack:4566/000000000000/backecast-dev-media-queue
+      # Sabotage exercise toggles (Phase 4) — both off by default. Set to
+      # "1" / a positive number, then `docker compose up -d --force-recreate
+      # worker`, to reproduce the exercises documented in SESSIONS.md.
+      - WORKER_SABOTAGE_FORCE_FAILURE=${WORKER_SABOTAGE_FORCE_FAILURE:-0}
+      - WORKER_SABOTAGE_SLEEP_SECONDS=${WORKER_SABOTAGE_SLEEP_SECONDS:-0}
+    depends_on:
+      init:
+        condition: service_completed_successfully
+
 volumes:
   localstack-data:
