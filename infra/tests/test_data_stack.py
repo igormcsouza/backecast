@@ -10,8 +10,10 @@ def synth_template() -> Template:
     return Template.from_stack(stack)
 
 
-def test_creates_two_buckets():
-    synth_template().resource_count_is("AWS::S3::Bucket", 2)
+def test_creates_one_bucket():
+    # Frontend is served from GitHub Pages, not S3+CloudFront — only the
+    # media bucket lives here.
+    synth_template().resource_count_is("AWS::S3::Bucket", 1)
 
 
 def test_table_has_composite_key_billing_mode_and_gsi():

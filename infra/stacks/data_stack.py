@@ -39,14 +39,6 @@ class DataStack(Stack):
             ],
         )
 
-        self.frontend_bucket = s3.Bucket(
-            self,
-            "FrontendBucket",
-            bucket_name=f"backecast-frontend-{stage}-{self.account}",
-            removal_policy=dev_policy,
-            auto_delete_objects=is_dev,
-        )
-
         self.table = dynamodb.Table(
             self,
             "Table",
