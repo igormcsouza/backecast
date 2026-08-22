@@ -43,7 +43,7 @@ Igor is building a small podcast platform as a learning project with production-
 ## 4. Architecture
 
 ```
-Next.js (static export) ──► S3 + CloudFront          [frontend hosting]
+Next.js (static export) ──► GitHub Pages              [frontend hosting]
         │
         ▼ HTTPS
 API Gateway (HTTP API) ──► Lambda (FastAPI + Mangum) [api]
@@ -60,13 +60,22 @@ Upload flow:
   Worker ──(6) writes metadata + status=review to DynamoDB
   UI  ──(7) admin polls GET /episodes/{id}, edits, publishes
 
-Streaming: CloudFront distribution in front of media bucket (Range requests
-work out of the box). NEVER serve audio via Lambda or raw S3 URLs.
+Streaming: CloudFront distribution in front of the media bucket only (Range
+requests work out of the box). NEVER serve audio via Lambda or raw S3 URLs.
+The frontend does NOT get a CloudFront distribution — a static Next.js
+export needs no origin logic GitHub Pages doesn't already give for free
+(global CDN, HTTPS, custom domain support).
 
 DLQ: SQS dead-letter queue attached to the worker queue, maxReceiveCount=3.
 ```
 
 **Why these choices (teach when relevant):**
+- Frontend on GitHub Pages, not S3+CloudFront (decided Session 4, 2026-08-22
+  — Igor's call, wants a clean shareable link, not a raw CloudFront domain):
+  CloudFront's job here is streaming Range requests off the media bucket —
+  a static export has no such need, and GitHub Pages already provides a
+  CDN, free HTTPS, and custom-domain support at zero cost. One less CDK
+  stack, one less thing to misconfigure or pay for.
 - Presigned URLs: browser uploads go straight to S3, avoiding Lambda's payload limits and compute costs.
 - SQS between S3 and the worker (instead of direct S3→Lambda): buffering, retry control, DLQ, and it's the event-driven lesson vehicle. Map concepts to RabbitMQ vocabulary when teaching (visibility timeout ≈ ack window, DLQ ≈ DLX, SNS fanout ≈ fanout exchange).
 - One DynamoDB table, on-demand mode. No SQL, no Alembic — the zhanymkanov DB conventions that assume SQLAlchemy don't apply; the repository-layer conventions still do.
@@ -80,7 +89,7 @@ DLQ: SQS dead-letter queue attached to the worker queue, maxReceiveCount=3.
 | AWS SDK | boto3 in plain `def` routes/services, or aioboto3 in `async def` — never mix (see async rules) |
 | AI | Transcription: **OpenAI `gpt-4o-mini-transcribe`** ($0.003/min — ~8x cheaper than AWS Transcribe; Claude has no audio API). Metadata generation: **LangChain** with a swappable chat model (default `langchain-anthropic`, `langchain-openai` one line away) |
 | Infra | **CDK in Python** (`aws-cdk-lib`), managed with uv, one stack per environment (`dev`, `prod`) |
-| CI/CD | GitHub Actions: CI on every PR (lint, tests, `cdk synth`, frontend build); CD on merge to `main` (deploy via OIDC role — no stored AWS keys) |
+| CI/CD | GitHub Actions: CI on every PR (lint, tests, `cdk synth`, frontend build); CD on merge to `main` (backend/infra deploy via OIDC role — no stored AWS keys; frontend deploys to **GitHub Pages** via `actions/deploy-pages`) |
 | Local dev | **docker-compose**: API (uvicorn `--reload`) + worker + LocalStack (S3, SQS, DynamoDB) — see "Local development" below |
 | Testing | pytest + moto (unit) · API integration tests against docker-compose/LocalStack (**Igor writes, AI helps**) · E2E with **Playwright in Python** (**AI writes entirely**) — see "Testing strategy" |
 
@@ -124,10 +133,9 @@ infra/
 ├── pyproject.toml           # uv project: aws-cdk-lib, constructs, pytest
 ├── app.py                   # CDK entrypoint: instantiates dev/prod stacks
 ├── stacks/
-│   ├── data_stack.py        # S3 buckets, DynamoDB table
+│   ├── data_stack.py        # media bucket, DynamoDB table (no frontend bucket — see below)
 │   ├── api_stack.py         # API Lambda, API Gateway HTTP API
-│   ├── pipeline_stack.py    # SQS queue + DLQ, worker Lambda, S3 notifications
-│   └── frontend_stack.py    # frontend bucket + CloudFront distributions
+│   └── pipeline_stack.py    # SQS queue + DLQ, worker Lambda, S3 notifications
 └── tests/                   # CDK assertions tests (Template.from_stack)
 ```
 
@@ -235,9 +243,9 @@ Each phase = one or more sessions. Rules per phase: state the goal → teach the
 
 ### Phase 6 — Frontend (AI-built)
 **Goal:** the public product. **The AI writes all frontend code**; Igor's involvement is the API contract and infra.
-- Igor's part: finalize the public API endpoints the frontend needs (paginated `GET /episodes` with cursor-based pagination via `LastEvaluatedKey` token, `GET /episodes/{id}`), and the CloudFront distributions in CDK (frontend bucket + media bucket).
-- AI's part (build without asking Igor to code): admin page (login with admin key, upload with progress via presigned POST, status polling, review/edit metadata, publish) and public page (paginated episode list + HTML5 audio player streaming from CloudFront). Respect static-export constraints (client-side fetching only). Keep design minimal; do not gold-plate. Give Igor a 5-minute tour of the structure afterward.
-**Done when:** Igor uploads an episode through the browser, publishes it, and streams it from the public page on his phone (seeking works).
+- Igor's part: finalize the public API endpoints the frontend needs (paginated `GET /episodes` with cursor-based pagination via `LastEvaluatedKey` token, `GET /episodes/{id}`), and enable GitHub Pages for the repo (Settings → Pages, source: GitHub Actions — no CDK involved, no frontend bucket/CloudFront distribution).
+- AI's part (build without asking Igor to code): admin page (login with admin key, upload with progress via presigned POST, status polling, review/edit metadata, publish) and public page (paginated episode list + HTML5 audio player streaming from the media bucket's CloudFront). Respect static-export constraints (client-side fetching only) and GitHub Pages' subpath serving (`igormcsouza.github.io/backecast/` — set Next's `basePath`/`assetPrefix` accordingly). Keep design minimal; do not gold-plate. Give Igor a 5-minute tour of the structure afterward.
+**Done when:** Igor uploads an episode through the browser, publishes it, and streams it from the public GitHub Pages URL on his phone (seeking works).
 
 ### Phase 7 — E2E tests (AI-built, Playwright in Python)
 **Goal:** a browser-level safety net, produced entirely by the AI.
@@ -247,20 +255,18 @@ Each phase = one or more sessions. Rules per phase: state the goal → teach the
 
 ### Phase 8 — CD: automated deployment (mandatory)
 **Goal:** merge to `main` deploys the whole stack; no long-lived AWS keys in GitHub.
-- Concepts to teach: **GitHub OIDC → AWS IAM role** (why it replaces access-key secrets; trust policy scoped to this repo and the `main` branch), least-privilege deploy role, `cdk deploy --require-approval never` in CI, ordering (deploy infra/backend first, then build the frontend with the API URL and sync it to S3 + invalidate CloudFront).
-- Build (`.github/workflows/deploy.yml`, triggered on push to `main`):
-  1. Reuse CI jobs as a required gate (workflow `needs` or branch protection).
-  2. `configure-aws-credentials` with `role-to-assume` (OIDC, no secrets).
-  3. `cdk deploy` all stacks to dev.
-  4. Read the API URL from stack outputs → `next build` with it → sync `frontend/out` to the frontend bucket → CloudFront invalidation.
-- Create the OIDC provider + deploy role **in CDK** (a small `ci_stack.py`), not by hand in the console.
+- Concepts to teach: **GitHub OIDC → AWS IAM role** (why it replaces access-key secrets; trust policy scoped to this repo and the `main` branch), least-privilege deploy role, `cdk deploy --require-approval never` in CI; the frontend deploy is a **separate, AWS-credential-free job** using GitHub's own Pages deploy action — worth teaching as the contrast case (no OIDC needed because it's not talking to AWS at all).
+- Build (`.github/workflows/deploy.yml`, triggered on push to `main`), two jobs:
+  1. `deploy-backend`: reuse CI jobs as a required gate → `configure-aws-credentials` with `role-to-assume` (OIDC, no secrets) → `cdk deploy` all stacks to dev.
+  2. `deploy-frontend`: needs `deploy-backend` (for the API URL stack output) → `next build` with the API URL baked in → `actions/upload-pages-artifact` + `actions/deploy-pages` (no AWS credentials involved).
+- Create the OIDC provider + deploy role **in CDK** (a small `ci_stack.py`), not by hand in the console — this only covers the backend/infra job.
 - **Sabotage exercise:** push a commit with a failing test to a branch, open a PR, confirm CI blocks it; then break `cdk synth` on `main` deliberately (in a safe way) and observe the deploy job fail *before* touching AWS.
 **Done when:** a one-line change merged to `main` appears on the public site with zero manual steps, and `git grep -i aws_secret` finds nothing.
 
 ### Phase 9 — Polish & stretch (optional)
 - `prod` stage: same stacks with a `prod` context, deployed via manual `workflow_dispatch` or tag push — teach the dev→prod promotion pattern.
 - Ephemeral PR preview environments (Igor already has patterns for this from SoftMedium).
-- Custom domain (Route53/Registro.br + ACM certificate).
+- Custom domain: a CNAME record (Registro.br or any registrar) pointed at GitHub Pages — no Route53/ACM needed for the frontend, GitHub issues the HTTPS cert automatically. Route53/ACM stays relevant only if the API gets a custom domain too (API Gateway custom domain name).
 - v2 backlog to record, not build: RSS feed, transcoding/normalization with ffmpeg, EventBridge fan-out (transcript job + RSS rebuild — natural "lesson two" of event-driven), Cognito auth.
 
 ## 8. Working agreements
