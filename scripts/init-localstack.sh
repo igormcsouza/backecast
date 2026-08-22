@@ -43,4 +43,74 @@ else
     --value "local-dev-admin-key" --region "$REGION"
 fi
 
-echo "init done — queue creation added in Phase 4"
+DLQ_NAME="backecast-dev-media-dlq"
+QUEUE_NAME="backecast-dev-media-queue"
+
+# Visibility timeout here must match infra/stacks/pipeline_stack.py's
+# VISIBILITY_TIMEOUT (~6x the worker Lambda's own timeout) — see that file
+# for why 6x. Kept as a literal here rather than derived because this script
+# has no Python/CDK context to import it from; if you change one, change
+# the other. maxReceiveCount likewise mirrors MAX_RECEIVE_COUNT there.
+VISIBILITY_TIMEOUT="180"
+MAX_RECEIVE_COUNT="3"
+
+if awslocal sqs get-queue-url --queue-name "$DLQ_NAME" --region "$REGION" >/dev/null 2>&1; then
+  echo "queue $DLQ_NAME already exists, skipping"
+  DLQ_URL=$(awslocal sqs get-queue-url --queue-name "$DLQ_NAME" --region "$REGION" --query QueueUrl --output text)
+else
+  DLQ_URL=$(awslocal sqs create-queue --queue-name "$DLQ_NAME" --region "$REGION" \
+    --attributes MessageRetentionPeriod=1209600 --query QueueUrl --output text)
+fi
+DLQ_ARN=$(awslocal sqs get-queue-attributes --queue-url "$DLQ_URL" --attribute-names QueueArn \
+  --region "$REGION" --query "Attributes.QueueArn" --output text)
+
+if awslocal sqs get-queue-url --queue-name "$QUEUE_NAME" --region "$REGION" >/dev/null 2>&1; then
+  echo "queue $QUEUE_NAME already exists, skipping"
+  QUEUE_URL=$(awslocal sqs get-queue-url --queue-name "$QUEUE_NAME" --region "$REGION" --query QueueUrl --output text)
+else
+  ATTRS=$(python3 - "$DLQ_ARN" "$VISIBILITY_TIMEOUT" "$MAX_RECEIVE_COUNT" <<'PY'
+import json
+import sys
+
+dlq_arn, visibility_timeout, max_receive_count = sys.argv[1:4]
+print(json.dumps({
+    "VisibilityTimeout": visibility_timeout,
+    "RedrivePolicy": json.dumps({
+        "deadLetterTargetArn": dlq_arn,
+        "maxReceiveCount": max_receive_count,
+    }),
+}))
+PY
+)
+  QUEUE_URL=$(awslocal sqs create-queue --queue-name "$QUEUE_NAME" --region "$REGION" \
+    --attributes "$ATTRS" --query QueueUrl --output text)
+fi
+QUEUE_ARN=$(awslocal sqs get-queue-attributes --queue-url "$QUEUE_URL" --attribute-names QueueArn \
+  --region "$REGION" --query "Attributes.QueueArn" --output text)
+
+# S3 -> SQS event notification: any object created under uploads/ (the
+# presigned POST's key prefix — see app/episodes/service.py) sends an event
+# straight to the queue. No SNS fan-out in between — mirrors
+# pipeline_stack.py's add_event_notification() wiring for AWS.
+NOTIFICATION_CONFIG=$(python3 - "$QUEUE_ARN" <<'PY'
+import json
+import sys
+
+queue_arn = sys.argv[1]
+print(json.dumps({
+    "QueueConfigurations": [
+        {
+            "QueueArn": queue_arn,
+            "Events": ["s3:ObjectCreated:*"],
+            "Filter": {
+                "Key": {"FilterRules": [{"Name": "prefix", "Value": "uploads/"}]}
+            },
+        }
+    ]
+}))
+PY
+)
+awslocal s3api put-bucket-notification-configuration --bucket "$BUCKET_NAME" \
+  --notification-configuration "$NOTIFICATION_CONFIG" --region "$REGION"
+
+echo "init done"

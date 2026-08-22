@@ -18,6 +18,142 @@
 
 ---
 
+## Session 5 — 2026-08-22 — Phase 4: The event pipeline (S3 → SQS → worker Lambda)
+**Built:** S3 (`uploads/` prefix) → SQS queue → worker Lambda → DLQ, wired
+both in CDK (for AWS) and docker-compose/LocalStack (for local dev). No AI —
+the worker only proves the wiring by flipping an episode's status
+`uploading → processing → processed-stub`.
+- `backend/worker/handler.py`: plain synchronous SQS-batch handler (no async
+  — SQS-triggered Lambdas don't need an event loop, so this sidesteps the
+  "no blocking boto3 in `async def`" rule entirely instead of relying on
+  discipline). Parses the S3 event embedded in each SQS message body,
+  derives the episode id from the object key, and moves it through the
+  state machine via `_transition()` — a conditional `UpdateItem`
+  (`ConditionExpression="#status = :from"`) that no-ops (doesn't raise) if
+  the item isn't in the expected "from" state. Returns
+  `{"batchItemFailures": [...]}` so only messages that actually failed are
+  retried (`ReportBatchItemFailures`), not the whole batch.
+- `backend/worker/local_poller.py`: the docker-compose `worker` service's
+  entrypoint — polls SQS in a loop and calls the *same* `handler()` Lambda
+  would call, deleting only the messages the handler reports as
+  successful. This is the "seam" manual.md calls out: local behavior can't
+  drift from AWS behavior because the business logic only exists once.
+- `backend/app/episodes/schemas.py`: `EpisodeStatus` gains `PROCESSING` and
+  `PROCESSED_STUB`.
+- `infra/stacks/pipeline_stack.py` (new): DLQ (`maxReceiveCount: 3`), main
+  queue (`visibility_timeout` = 180s = 6× the worker Lambda's own 30s
+  timeout), worker `PythonFunction` (table read/write only — no S3 access
+  needed since the worker never reads the object, only its key), an SQS
+  event source mapping (`batch_size=5`,
+  `report_batch_item_failures=True`), and an S3→SQS `ObjectCreated`
+  notification on `uploads/`. `infra/tests/test_pipeline_stack.py` (7 new
+  assertion tests) covers all of the above. `infra/app.py` instantiates it.
+  `cdk synth` succeeds for all three stacks; not deployed to real AWS this
+  session (that's a separate, Igor-approved action).
+- `docker-compose.yml`: new `worker` service (`python -m
+  worker.local_poller`), plus two sabotage-toggle env vars
+  (`WORKER_SABOTAGE_FORCE_FAILURE`, `WORKER_SABOTAGE_SLEEP_SECONDS`,
+  both default off). `scripts/init-localstack.sh` now creates the DLQ +
+  queue (mirroring the CDK visibility timeout / maxReceiveCount by hand,
+  since the script has no CDK context to import them from) and the S3→SQS
+  notification config.
+- Tests: `backend/tests/test_worker_handler.py` (unit, in-memory fake
+  table — no AWS) covers the happy path, duplicate delivery being a
+  no-op, forced failure being reported as a batch item failure, partial
+  batch failure only reporting the bad message, and the `s3:TestEvent`
+  skip. `backend/tests/integration/test_processing_flow.py` uploads a real
+  episode and polls (bounded timeout — no synchronous "done" signal for an
+  async pipeline) until status reaches `processed-stub`; passes against
+  the full compose stack.
+**Decisions:** worker Lambda given no S3 permissions — Phase 4's stub never
+reads the uploaded object, only the key embedded in the S3 event, so
+granting `s3:GetObject` would be an unused permission (Phase 5's ffmpeg step
+will need it, added then). The S3 bucket notification is attached to a
+same-named *imported* bucket inside `PipelineStack`
+(`s3.Bucket.from_bucket_name`) rather than to the concrete `bucket` construct
+passed in from `DataStack` — calling `add_event_notification()` on the real
+construct would plant its custom-resource handler in `DataStack`, which
+would then need `PipelineStack`'s queue ARN, creating a dependency cycle
+with `PipelineStack`'s existing dependency on `DataStack` for the table.
+Importing by name keeps the only cross-stack reference one-directional (a
+plain bucket-name string). Sabotage hooks (`WORKER_SABOTAGE_*` env vars)
+were left in the shipped worker code rather than added-then-reverted by
+hand each time — they default to inert, cost nothing in production, and
+make the exercises reproducible instead of one-off.
+**Learned:** — (Igor to fill in, in his own words — see the sabotage
+exercise findings below for the raw material)
+**Open questions:** none.
+**Next step:** start Phase 5 — AI metadata generation. The worker's stub
+middle section (`_transition` → sleep → `_transition`) gets replaced with
+real work: ffmpeg preprocessing to compressed mono audio (ship the worker as
+a Lambda **container image**, not zip, to bundle ffmpeg), OpenAI
+`gpt-4o-mini-transcribe` (~$0.003/min, state cost before the first real
+run), then a LangChain metadata chain (`init_chat_model` +
+`.with_structured_output()` against a Pydantic model) producing title/
+description/resource links. Revisit `WORKER_TIMEOUT` (currently 30s, stub-
+sized) and the derived visibility timeout once the ffmpeg+transcribe+LLM
+budget is known — Phase 5's own callback to this session's 6× rule. Store
+the transcript in S3, not DynamoDB (400KB item limit). Mandatory sabotage
+exercise: make the LLM return an invalid resource-link shape and watch
+Pydantic validation fail.
+
+### Sabotage exercise findings (factual account — for the Learned line above)
+
+All three run against the real docker-compose + LocalStack stack (not a
+simulation), using the shipped `WORKER_SABOTAGE_*` env vars plus direct
+`awslocal sqs`/`dynamodb` calls to control and inspect queue state.
+
+1. **Forced failure → retry → DLQ.** Set
+   `WORKER_SABOTAGE_FORCE_FAILURE=1` and (to keep the exercise fast)
+   temporarily lowered the queue's visibility timeout to 5s. Uploaded one
+   episode. The worker logged the same `RuntimeError` three times, roughly
+   6 seconds apart (`17:47:07`, `17:47:13`, `17:47:19` — i.e. once per
+   visibility-timeout redelivery), each time reporting the message as a
+   batch item failure. After the third failure the message stopped being
+   redelivered to the main queue and appeared in the DLQ instead, with
+   `ApproximateReceiveCount: 4` and `DeadLetterQueueSourceArn` pointing back
+   at the main queue — SQS moves a message to the DLQ once its receive
+   count exceeds `maxReceiveCount` (3), consistent with the CDK/init-script
+   config. The episode's DynamoDB item stayed at `status=uploading` the
+   whole time (the forced failure raises before any transition runs), so no
+   partial state was left behind either.
+2. **Visibility timeout shorter than processing time → duplicate delivery.**
+   Set the queue's visibility timeout to 5s and the worker's sabotage sleep
+   to 20s (deliberately: sleep > visibility timeout). Uploaded an episode,
+   then — since the compose `worker` service is a single-threaded poller
+   and can't race against itself — manually invoked `worker.handler.handler`
+   a second time (playing the role of a second consumer) against whatever
+   the queue handed back once the 5s visibility window expired, while the
+   first invocation was still 12 seconds into its 20-second sleep. The
+   queue *did* hand the same message back: the second invocation logged its
+   own `"processing started"` for the same episode id — duplicate
+   processing genuinely occurred, exactly as a too-short visibility timeout
+   predicts. But its `uploading → processing` transition immediately hit
+   `ConditionalCheckFailedException` (logged as `"transition skipped
+   (idempotency guard)"`) because the first invocation had already made
+   that transition; the second invocation returned cleanly with no
+   exception and no further writes. The item's final DynamoDB state was
+   `processed-stub` with a single `updated_at` from the first invocation's
+   completion — no corruption, no double-processing side effect, despite
+   the duplicate delivery actually happening. Restoring the visibility
+   timeout to 180s (the correct 6× value) and repeating the same 8-second
+   sleep produced no redelivery at all: only one `"processing started"` log
+   line, because the message stayed invisible for the whole processing
+   window.
+3. **Same message processed twice → idempotency guard holds.** Uploaded an
+   episode and let it finish normally (`status=processed-stub`,
+   `updated_at=17:57:15.384453Z`). Then manually replayed the identical S3
+   event (same bucket/key, a new SQS `messageId`) straight into
+   `handler()`, simulating an at-least-once redelivery of an
+   already-fully-processed message. The replay logged `"processing
+   started"` followed immediately by `"transition skipped (idempotency
+   guard)"`, returned `{"batchItemFailures": []}` (no error), and left the
+   DynamoDB item completely unchanged — same status, same `updated_at`
+   timestamp as before the replay. The conditional write is what makes this
+   safe: a second delivery of the same logical event finds the item already
+   past the `uploading` state and simply does nothing, rather than
+   re-running work or corrupting the record.
+
 ## Session 4 — 2026-08-22 — Phase 3: Upload flow (presigned POST)
 **Built:** `POST /api/v1/episodes` creates a DynamoDB item (`status=uploading`,
 PK/SK=`EPISODE#{id}`, GSI1PK=`EPISODE`) and returns a presigned S3 POST
