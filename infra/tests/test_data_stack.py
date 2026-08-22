@@ -1,5 +1,5 @@
 import aws_cdk as cdk
-from aws_cdk.assertions import Template
+from aws_cdk.assertions import Match, Template
 
 from stacks.data_stack import DataStack
 
@@ -40,3 +40,26 @@ def test_table_has_composite_key_billing_mode_and_gsi():
 def test_dev_buckets_are_destroyable():
     template = synth_template()
     template.has_resource("AWS::S3::Bucket", {"DeletionPolicy": "Delete"})
+
+
+def test_media_bucket_cors_allows_post():
+    template = synth_template()
+    template.has_resource_properties(
+        "AWS::S3::Bucket",
+        {
+            "CorsConfiguration": {
+                "CorsRules": Match.array_with(
+                    [Match.object_like({"AllowedMethods": Match.array_with(["POST"])})]
+                )
+            }
+        },
+    )
+
+
+def test_creates_admin_key_ssm_parameter():
+    template = synth_template()
+    template.resource_count_is("AWS::SSM::Parameter", 1)
+    template.has_resource_properties(
+        "AWS::SSM::Parameter",
+        {"Name": "/backecast/dev/admin-key"},
+    )

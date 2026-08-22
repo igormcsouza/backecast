@@ -2,7 +2,12 @@
 
 from fastapi import APIRouter, Depends
 
-from app.episodes.schemas import GetEpisodeSchema
+from app.core.auth import require_admin_key
+from app.episodes.schemas import (
+    CreateEpisodeRequest,
+    CreateEpisodeResponse,
+    GetEpisodeSchema,
+)
 from app.episodes.service import get_episodes_service, EpisodesService
 from app.episodes.exceptions import EpisodesRepositoryError
 
@@ -27,10 +32,18 @@ async def get_episode(episode_id: str):
     return
 
 
-@episodes_router.post("", summary="Create a new episode")
-async def create_episode():
-    """Create a new episode"""
-    return {"message": "Create a new episode"}
+@episodes_router.post(
+    "",
+    status_code=201,
+    summary="Create a new episode",
+    dependencies=[Depends(require_admin_key)],
+)
+async def create_episode(
+    payload: CreateEpisodeRequest,
+    service: EpisodesService = Depends(get_episodes_service),
+) -> CreateEpisodeResponse:
+    """Create a new episode (status=uploading) and return a presigned POST."""
+    return await service.create_episode(payload)
 
 
 @episodes_router.put("/{episode_id}", summary="Update a specific episode")

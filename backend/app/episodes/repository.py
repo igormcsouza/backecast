@@ -10,6 +10,7 @@ from typing import Any
 
 from fastapi import Depends
 
+from app.episodes.exceptions import EpisodeAlreadyExistsError
 from app.shared.abstracts import RepositoryAbstract
 from app.shared.dynamodb import get_table
 
@@ -25,6 +26,19 @@ class EpisodesRepository(RepositoryAbstract):
             ExpressionAttributeValues={":pk": "EPISODE"},
         )
         return response["Items"]
+
+    async def create(self, item: dict) -> dict:
+        # ConditionExpression makes this a create-or-fail instead of a
+        # silent overwrite — the same idempotency primitive the Phase 4
+        # worker will reuse for status transitions on repeated SQS delivery.
+        try:
+            await self._table.put_item(
+                Item=item,
+                ConditionExpression="attribute_not_exists(PK)",
+            )
+        except self._table.meta.client.exceptions.ConditionalCheckFailedException as e:
+            raise EpisodeAlreadyExistsError() from e
+        return item
 
 
 def get_episodes_repository(table: Any = Depends(get_table)) -> EpisodesRepository:

@@ -1,6 +1,7 @@
 from aws_cdk import Duration, RemovalPolicy, Stack
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_s3 as s3
+from aws_cdk import aws_ssm as ssm
 from constructs import Construct
 
 
@@ -21,7 +22,11 @@ class DataStack(Stack):
             auto_delete_objects=is_dev,
             cors=[
                 s3.CorsRule(
-                    allowed_methods=[s3.HttpMethods.PUT, s3.HttpMethods.GET],
+                    allowed_methods=[
+                        s3.HttpMethods.PUT,
+                        s3.HttpMethods.POST,
+                        s3.HttpMethods.GET,
+                    ],
                     allowed_origins=["*"],
                     allowed_headers=["*"],
                 )
@@ -61,4 +66,16 @@ class DataStack(Stack):
             sort_key=dynamodb.Attribute(
                 name="GSI1SK", type=dynamodb.AttributeType.STRING
             ),
+        )
+
+        # Placeholder value — the real secret is set manually post-deploy via
+        # `aws ssm put-parameter --overwrite`, never committed. A plain
+        # StringParameter (not SecureString) is used because CDK's L2
+        # construct doesn't support SecureString directly; acceptable for a
+        # single dev-only shared admin secret.
+        self.admin_key_param = ssm.StringParameter(
+            self,
+            "AdminKeyParam",
+            parameter_name=f"/backecast/{stage}/admin-key",
+            string_value="changeme-placeholder",
         )

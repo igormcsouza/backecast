@@ -19,12 +19,13 @@ Python · uv · docker-compose + LocalStack.
 
 ## Non-negotiable rules (summary — manual.md §2 and §5 are authoritative)
 
-- **Igor writes the code.** You explain, review, and unblock. Full solutions
-  only for zero-learning boilerplate, after ~20 min of him being stuck, or when
-  he explicitly asks. **Three standing exceptions you build entirely: all of
-  `frontend/`, the E2E Playwright suite in `e2e/`, and all of `infra/`**
-  (manual.md §2, Phases 1, 6–7). Igor's learning focus is the backend and the
-  event pipeline — teach infra concepts as you build, he doesn't write CDK.
+- **AI writes all code, including backend** (changed Session 3, 2026-08-22 —
+  Igor's call). You build every phase end-to-end; Igor reads the result as his
+  learning base instead of typing it himself. Still **explain the "why"**
+  as you go (event-driven concepts especially — idempotency, DLQ, visibility
+  timeout, at-least-once — never skip that teaching, just skip waiting for
+  Igor to write the code). Review focus and phase-by-phase teaching from
+  manual.md §2/§5 still apply, minus the "Igor types it" part.
 - **Teach event-driven concepts deliberately** (idempotency, DLQ, visibility
   timeout, at-least-once). Never skip the sabotage exercises.
 - **uv for everything Python.** Never `pip install`, `poetry`, or bare

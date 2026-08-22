@@ -19,6 +19,13 @@ class AppException(Exception):
         super().__init__(self.message)
 
 
+class AdminAuthError(AppException):
+    """Raised when the X-Admin-Key header is missing or doesn't match SSM."""
+
+    status_code = 401
+    message = "Invalid or missing admin key"
+
+
 async def app_exception_handler(request: Request, exc: AppException) -> JSONResponse:
     logger.error(
         exc.message,

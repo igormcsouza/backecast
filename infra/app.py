@@ -16,6 +16,8 @@ ApiStack(
     f"Backecast-{stage}-Api",
     stage=stage,
     table=data_stack.table,
+    bucket=data_stack.media_bucket,
+    admin_key_param=data_stack.admin_key_param,
     env=env,
 )
 

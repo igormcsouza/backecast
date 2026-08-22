@@ -17,6 +17,10 @@ class Settings(BaseSettings):
     table_name: str = "backecast-dev"
     aws_region: str = "sa-east-1"
     aws_endpoint_url: str | None = None  # set thru env vars
+    media_bucket_name: str = "backecast-media-dev"
+    admin_key_param_name: str = "/backecast/dev/admin-key"
+    max_upload_bytes: int = 60 * 1024 * 1024  # ~60MB: a 25-min mp3 + headroom
+    allowed_content_types: tuple[str, ...] = ("audio/mpeg", "audio/mp4", "audio/x-m4a")
 
 
 @lru_cache(maxsize=1)

@@ -12,3 +12,14 @@ class RepositoryAbstract:
             list[dict]: A list of items in the repository.
         """
         raise NotImplementedError("Subclasses must implement this method.")
+
+    async def create(self, item: dict) -> dict:
+        """Create a new item in the repository.
+
+        Args:
+            item: The item to persist.
+
+        Returns:
+            dict: The persisted item.
+        """
+        raise NotImplementedError("Subclasses must implement this method.")

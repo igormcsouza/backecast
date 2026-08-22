@@ -18,6 +18,59 @@
 
 ---
 
+## Session 4 — 2026-08-22 — Phase 3: Upload flow (presigned POST)
+**Built:** `POST /api/v1/episodes` creates a DynamoDB item (`status=uploading`,
+PK/SK=`EPISODE#{id}`, GSI1PK=`EPISODE`) and returns a presigned S3 POST
+(`content-length-range` ≤60MB + `Content-Type` conditions). New:
+`app/core/auth.py` (`X-Admin-Key` dependency, secret from SSM, cached at
+module scope), `app/shared/s3.py` (presigned-POST helper via
+`run_in_threadpool` — sync boto3 call, must not block the event loop),
+`EpisodesRepository.create()` (conditional `put_item`,
+`attribute_not_exists(PK)`). Infra: media bucket CORS now allows `POST`, new
+SSM `StringParameter` for the admin key, `ApiStack` grants
+`table.grant_read_write_data`, `bucket.grant_put`, `admin_key_param.grant_read`.
+`docker-compose.yml`/`scripts/init-localstack.sh` seed the media bucket + a
+fixed local admin key (`local-dev-admin-key`). First integration tests in
+`backend/tests/integration/test_upload_flow.py` (4 tests: create + DynamoDB
+item, real upload to S3 via the presigned response, missing/wrong admin key
+→ 401) — pass locally, run via `docker compose run --rm api uv run pytest
+tests/integration` (must run inside the compose network — the presigned
+URL is signed against `http://localstack:4566`, unreachable from the host).
+**Decisions:** wrote the DynamoDB item before generating the presigned POST
+(no orphan key without a tracking row, no promise without a signed URL).
+Plain SSM `StringParameter` (not `SecureString`) for the dev admin key —
+CDK's L2 construct doesn't support `SecureString` directly; fine for a
+single dev-only shared secret, real value set manually post-deploy via
+`aws ssm put-parameter --overwrite`. Deferred adding `moto` + a unit test for
+the repository's conditional-write branch — not a project dependency yet,
+and the integration test already exercises the real path against LocalStack;
+revisit as a small standalone task, not a Phase 3 blocker.
+**Learned:** —
+**Open questions:** none.
+**Next step:** start Phase 4 — the event pipeline (S3 → SQS → worker Lambda,
+DLQ, `maxReceiveCount: 3`). No AI yet — the worker just flips
+`uploading → processing → processed-stub`. Concepts: at-least-once delivery,
+visibility timeout (≈6× worker timeout), `ReportBatchItemFailures`,
+idempotency via conditional writes (reuse the pattern from
+`EpisodesRepository.create()`). Three mandatory sabotage exercises per
+manual.md §7 Phase 4 — don't skip them.
+
+## Session 3 — 2026-08-22 — Working-agreement change: AI writes backend too
+**Built:** nothing code-wise yet — this entry closes the loop on the Phase 2
+commit (`af286a3`, FastAPI skeleton on Lambda) that shipped without a
+session-log entry, and records a policy change before Phase 3 starts.
+**Decisions:** Igor no longer wants to hand-write `backend/`. AI now builds
+every phase entirely (backend included, alongside the pre-existing
+frontend/e2e/infra exceptions); Igor reviews and uses the result as his
+learning base. Updated `CLAUDE.md` and `manual.md` §2 to match.
+**Learned:** —
+**Open questions:** none.
+**Next step:** start Phase 3 — Upload flow (presigned POST), AI-built:
+`POST /api/v1/episodes` (presigned POST with `content-length-range`, ~60MB
+cap), `X-Admin-Key` auth dependency (secret from SSM), conditional DynamoDB
+write with status=`uploading`, first integration tests in
+`backend/tests/integration/` against the docker-compose stack.
+
 ## Session 2 — 2026-07-11 — Phase 1: Infra skeleton
 **Built:** `infra/stacks/data_stack.py` (media bucket + frontend bucket + DynamoDB
 table, PK/SK + GSI1 for published-episode listing, dev removal policy), wired

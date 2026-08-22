@@ -20,4 +20,27 @@ else
     --region "$REGION"
 fi
 
-echo "init done — bucket/queue creation added in Phase 3/4"
+BUCKET_NAME="backecast-media-dev"
+
+if awslocal s3api head-bucket --bucket "$BUCKET_NAME" >/dev/null 2>&1; then
+  echo "bucket $BUCKET_NAME already exists, skipping"
+else
+  awslocal s3 mb "s3://$BUCKET_NAME" --region "$REGION"
+  awslocal s3api put-bucket-cors --bucket "$BUCKET_NAME" --cors-configuration '{
+    "CORSRules": [{"AllowedMethods": ["PUT","POST","GET"], "AllowedOrigins": ["*"], "AllowedHeaders": ["*"]}]
+  }'
+fi
+
+ADMIN_KEY_PARAM="/backecast/dev/admin-key"
+
+# Fixed, known value for local/CI only — integration tests hardcode it.
+# Real AWS gets its value set manually via `aws ssm put-parameter --overwrite`,
+# never committed.
+if awslocal ssm get-parameter --name "$ADMIN_KEY_PARAM" --region "$REGION" >/dev/null 2>&1; then
+  echo "param $ADMIN_KEY_PARAM already exists, skipping"
+else
+  awslocal ssm put-parameter --name "$ADMIN_KEY_PARAM" --type String \
+    --value "local-dev-admin-key" --region "$REGION"
+fi
+
+echo "init done — queue creation added in Phase 4"

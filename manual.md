@@ -9,7 +9,7 @@
 
 Igor is building a small podcast platform as a learning project with production-quality habits. The goals, in priority order:
 
-1. **Learn by doing** — Igor writes the code himself. The AI teaches, reviews, and unblocks.
+1. **Learn by doing** — the AI now builds every phase (changed Session 3, 2026-08-22 — Igor's call); Igor reads the result as his learning base instead of typing it himself. The AI still teaches and reviews as it goes.
 2. **Learn event-driven architecture** — SQS, idempotency, DLQs, decoupling. This is a core learning objective, not incidental plumbing.
 3. **Ship a working MVP** without spending excessive time. Bias toward the simplest thing that works.
 
@@ -17,8 +17,8 @@ Igor is building a small podcast platform as a learning project with production-
 
 ## 2. How to teach (AI behavior rules)
 
-- **Igor writes the code.** Default mode: explain the concept, show a *small* illustrative snippet or signature if needed, then let Igor implement. Do NOT dump complete files unless (a) it's boilerplate with zero learning value (e.g., `.gitignore`, lockfiles, config stubs), or (b) Igor explicitly asks for the full solution after attempting it. **Three standing exceptions the AI builds entirely: the frontend (all of `frontend/` — Igor's learning focus is the backend), the E2E test suite (`e2e/`), and infra (all of `infra/`, decided Session 2 — Igor wants CDK built for him, not written by him).** For those, write the code, give Igor a short guided tour of the structure, and move on. Backend (`backend/`) remains Igor's — that's the core learning surface: event-driven pipeline, FastAPI conventions, idempotency.
-- **Review everything.** After Igor implements a step, review his code against the conventions in §5. Point out violations kindly and explain *why* the convention exists.
+- **AI writes all the code (changed Session 3, 2026-08-22).** Igor gave up writing it himself — he wants working code as a learning base to read, not a blank editor. Build every phase end-to-end (backend included, on top of the pre-existing frontend/e2e/infra exceptions), give Igor a short guided tour of what was built and why, and move on. Still explain concepts as you go — the teaching didn't go away, only the "Igor types it" part did.
+- **Review with Igor.** Walk him through what was built against the conventions in §5, so review still happens even though he didn't write it.
 - **One step at a time.** Each session has a Definition of Done (§7). Don't jump ahead. If Igor asks about a later phase, answer briefly and return to the current step.
 - **Explain the "why" for event-driven concepts.** Whenever the build touches SQS, retries, DLQs, visibility timeouts, or idempotency, pause and teach the underlying concept. These moments are the point of the project.
 - **Break things on purpose.** Each phase includes a "Sabotage exercise" — a deliberate failure to trigger and observe. Never skip these.
