@@ -331,10 +331,16 @@ def _advance_processing(
     moved = _transition(
         episode_id, EpisodeStatus.PROCESSING, EpisodeStatus.TRANSCRIBING
     )
-    next_status = (
-        EpisodeStatus.TRANSCRIBING.value if moved else _current_status(episode_id)
-    )
-    return next_status, compressed_path
+    if not moved:
+        # Lost a race with a concurrent delivery of the same message — it
+        # already advanced the item past `processing`. Our locally
+        # transcoded file is now orphaned (the winner will redo the
+        # transcode itself when it gets here, since no local file survives
+        # across invocations/containers anyway), so clean it up now rather
+        # than leaking it in /tmp across warm-container reuse.
+        audio.cleanup(compressed_path)
+        return _current_status(episode_id), None
+    return EpisodeStatus.TRANSCRIBING.value, compressed_path
 
 
 def _advance_transcribing(
@@ -346,8 +352,26 @@ def _advance_transcribing(
         # containers), so redo the ffmpeg step. Duration was already
         # checked once to get this far, but audio.preprocess() re-checks it
         # anyway (cheap, and the source hasn't changed) rather than adding
-        # a second code path that skips it.
-        compressed_path = _preprocess_audio(bucket, key, episode_id)
+        # a second code path that skips it. Same handled-outcome guard as
+        # _advance_processing: if the cap changed between deploys (or this
+        # is the race-loser path from _advance_processing, which now always
+        # resumes here with compressed_path=None), a duration-cap failure
+        # on the redo must still land on `rejected`, not `failed` — the
+        # episode shouldn't get a different terminal status just because it
+        # happened to be caught the second time instead of the first.
+        try:
+            compressed_path = _preprocess_audio(bucket, key, episode_id)
+        except audio.EpisodeTooLongError as e:
+            _transition(episode_id, EpisodeStatus.TRANSCRIBING, EpisodeStatus.REJECTED)
+            logger.warning(
+                "episode rejected: duration exceeds cap",
+                extra={
+                    "episode_id": episode_id,
+                    "duration_seconds": e.duration_seconds,
+                    "cap_seconds": e.cap_seconds,
+                },
+            )
+            return EpisodeStatus.REJECTED.value
 
     try:
         transcript_text = transcribe_audio(compressed_path)

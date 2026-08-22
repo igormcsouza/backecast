@@ -60,15 +60,17 @@ VISIBILITY_TIMEOUT = Duration.seconds(int(WORKER_TIMEOUT.to_seconds()) * 6)
 # every receive to fail on purpose and watches this counter run out.
 MAX_RECEIVE_COUNT = 3
 
-# How many messages one worker invocation may receive at once. A larger
-# batch amortizes Lambda invocation overhead across more work but also means
-# one slow/failing message in the batch (partial failure) delays the whole
-# batch's visibility-timeout clock together. Phase 5's per-message cost is
-# now known (minutes of ffmpeg+OpenAI+LLM work, not milliseconds) — a batch
-# of 5 means one invocation could legitimately run close to WORKER_TIMEOUT
-# just processing sequentially, so this stays small and conservative rather
-# than being raised alongside the timeout.
-BATCH_SIZE = 5
+# How many messages one worker invocation may receive at once. The handler
+# processes batch records sequentially (see worker/handler.py), so total
+# invocation time is roughly BATCH_SIZE * (per-episode processing time), not
+# a single episode's time. Phase 5's per-message cost is minutes of
+# ffmpeg+OpenAI+LLM work, close to WORKER_TIMEOUT on its own for a
+# near-cap-length episode — batching more than one together risks the
+# Lambda's own timeout killing the invocation mid-batch (which fails every
+# message in it, including ones that already finished, since no
+# batchItemFailures gets reported for a hard timeout). Kept at 1 so
+# WORKER_TIMEOUT bounds a single invocation's worst case exactly.
+BATCH_SIZE = 1
 
 
 class PipelineStack(Stack):

@@ -135,7 +135,7 @@ def test_event_source_mapping_enables_report_batch_item_failures():
     template.has_resource_properties(
         "AWS::Lambda::EventSourceMapping",
         {
-            "BatchSize": 5,
+            "BatchSize": 1,
             "FunctionResponseTypes": ["ReportBatchItemFailures"],
         },
     )
