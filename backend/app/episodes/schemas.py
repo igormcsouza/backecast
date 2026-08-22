@@ -9,13 +9,16 @@ class EpisodeStatus(str, Enum):
     """Lifecycle states an episode item moves through.
 
     UPLOADING (Phase 3) -> PROCESSING (Phase 4 wiring proof) -> Phase 5's
-    real AI chain: TRANSCRIBING -> GENERATING -> REVIEW. REJECTED is a
-    terminal state reached straight from PROCESSING when ffmpeg's duration
-    probe finds the upload over the transcription-length cap (no
-    transcription attempt, no cost). FAILED is terminal for any other
-    unrecoverable error at any stage — the worker lets the SQS message go
-    to the DLQ rather than swallowing the exception, so a human can inspect
-    why. PUBLISHED (a human moving a REVIEW episode live) is a later phase.
+    real AI chain: TRANSCRIBING -> GENERATING -> REVIEW -> Phase 6's
+    PUBLISHED (an admin moving a REVIEW episode live, via
+    `POST /episodes/{id}/publish` — the only place this transition
+    happens, always conditional on the item currently being REVIEW).
+    REJECTED is a terminal state reached straight from PROCESSING when
+    ffmpeg's duration probe finds the upload over the transcription-length
+    cap (no transcription attempt, no cost). FAILED is terminal for any
+    other unrecoverable error at any stage — the worker lets the SQS
+    message go to the DLQ rather than swallowing the exception, so a human
+    can inspect why.
     Declared as a str-enum so schemas are typed while the value stored in
     DynamoDB stays a plain string.
     """
@@ -25,6 +28,7 @@ class EpisodeStatus(str, Enum):
     TRANSCRIBING = "transcribing"
     GENERATING = "generating"
     REVIEW = "review"
+    PUBLISHED = "published"
     REJECTED = "rejected"
     FAILED = "failed"
 
@@ -68,6 +72,12 @@ class GetEpisodeSchema(BaseModel):
     release_date: str
     audio_url: str | None = None
     image_url: str | None = None
+    # Phase 6 addition: the worker (worker/handler.py's generating -> review
+    # transition) has always written resources into the DynamoDB item, but
+    # this schema never surfaced them — no reader needed them until now.
+    # The admin review view needs to show and edit them, and the public
+    # page needs to render them, so they're part of the read shape.
+    resources: list[Resource] = []
     created_at: str
     updated_at: str
 
@@ -95,3 +105,29 @@ class CreateEpisodeResponse(BaseModel):
     id: str
     status: EpisodeStatus
     upload: PresignedPostSchema
+
+
+class UpdateEpisodeRequest(BaseModel):
+    """Admin edits to an episode's AI-generated metadata, made from the
+    review view before publishing. Every field is optional — a PATCH only
+    touches the fields it's given (`None` means "leave as is", not "clear
+    this field"), so the frontend can send just the field the reviewer
+    changed instead of the whole episode.
+    """
+
+    title: str | None = None
+    description: str | None = None
+    resources: list[Resource] | None = None
+
+
+class PaginatedEpisodesResponse(BaseModel):
+    """The public `GET /episodes` list shape.
+
+    `cursor` is an opaque, base64-encoded token wrapping DynamoDB's
+    `LastEvaluatedKey` — clients pass it back verbatim as `?cursor=...` to
+    fetch the next page and must never construct or inspect it themselves.
+    `None` means there is no next page.
+    """
+
+    items: list[GetEpisodeSchema]
+    cursor: str | None = None

@@ -18,6 +18,156 @@
 
 ---
 
+## Session 7 — 2026-08-22 — Phase 6: Frontend (admin + public pages)
+**Built:** the whole `frontend/` app (Next.js App Router, static export,
+TypeScript, Tailwind) plus the backend read/edit/publish routes it needs.
+
+Backend (`backend/app/episodes/`):
+- `schemas.py`: `EpisodeStatus` gains `PUBLISHED`. `GetEpisodeSchema` gains
+  `resources: list[Resource] = []` — the worker has written resources to
+  DynamoDB since Phase 5, but no schema ever surfaced them; the review view
+  needs to show/edit them. New `UpdateEpisodeRequest` (all fields optional —
+  PATCH only touches what's given) and `PaginatedEpisodesResponse`
+  (`items` + opaque `cursor`).
+- `repository.py`: `get()`, `update()` (generic partial `SET`, placeholder-
+  based like the worker's `_transition()`), `publish()` (conditional
+  `review → published`, same idempotency primitive as every other
+  transition in this codebase), `list_by_status()`, `list_published_page()`
+  (cursor pagination — see Decisions). Needed `from __future__ import
+  annotations` at the top: defining a method literally named `list` earlier
+  in the class body shadows the builtin for every `-> list[...]`
+  annotation declared afterward in the same class (`TypeError: 'function'
+  object is not subscriptable` at import time) — PEP 563 defers annotation
+  evaluation and sidesteps it.
+- `service.py` / `router.py`: new routes — `GET /episodes` (public,
+  paginated, `status=published` only), `GET /episodes/{id}` (public, 404s
+  for missing *and* unpublished so it can never confirm an unpublished
+  episode's existence), `GET /episodes/admin` (admin, optional
+  `?status=` filter — the review queue), `GET /episodes/{id}/admin` (admin,
+  any status — status polling + review view), `PATCH /episodes/{id}`
+  (admin, edit metadata, 409 unless `status=review`), `POST
+  /episodes/{id}/publish` (admin, `review → published`, 409 otherwise).
+  Removed the old do-nothing `PUT` stub (superseded by `PATCH`).
+- `shared/s3.py`: `create_presigned_get()` — same `run_in_threadpool`
+  treatment as the existing presigned-POST helper.
+- New integration tests: `tests/integration/test_public_episodes_flow.py`,
+  `tests/integration/test_episodes_admin_review_flow.py` (23 tests total in
+  the suite now, all passing via `docker compose run --rm api uv run
+  pytest tests/integration`) — episodes are seeded directly into DynamoDB
+  rather than run through the real pipeline, since these tests are about
+  the new routes' filtering/auth/status-transition guards, not the AI
+  pipeline `test_processing_flow.py` already covers.
+
+Frontend (`frontend/`, all new except `next.config.ts`/`layout.tsx`/`page.tsx`,
+which had a Phase-0 skeleton):
+- `lib/types.ts`: hand-written mirror of the Pydantic schemas (no codegen).
+- `lib/api.ts`: fetch wrapper (`NEXT_PUBLIC_API_URL`, `X-Admin-Key` header
+  when given, JSON error unwrapping into `ApiError`) plus
+  `uploadToPresignedPost()` (XHR, not `fetch`, specifically for
+  `xhr.upload.onprogress` — `fetch`'s upload-progress story is still
+  inconsistent across browsers).
+- `lib/admin-key.ts`: localStorage get/set/clear for the admin key, guarded
+  with `typeof window` checks — `output: 'export'` still statically
+  prerenders "use client" components to HTML at build time in Node, where
+  there's no `window`.
+- `app/page.tsx`: public episode list, cursor "Load more".
+- `app/episode/page.tsx`: public detail + `<audio controls>` player + resource
+  links. Takes `?id=` as a query param, not a Next.js dynamic route segment
+  (`[id]`) — static export needs `generateStaticParams` for those, and
+  episode ids don't exist at build time. Wrapped in `<Suspense>`
+  (`useSearchParams()` requires it even for a fully client-rendered page).
+- `app/admin/page.tsx`: login gate (key held in localStorage, validated
+  against `GET /episodes/admin` on mount so a stale key doesn't look
+  "signed in" until the first real action fails), upload form (presigned
+  POST + XHR progress bar), post-upload status poller (2s interval, 5min
+  timeout — same polling-with-timeout shape as the backend's own
+  integration tests, driven from the browser instead of pytest), review
+  queue list.
+- `app/admin/review/page.tsx`: edit form (title/description/resources,
+  disabled once no longer `status=review`) + Save (`PATCH`) + Publish
+  (`POST .../publish`) buttons. Same `?id=` + `Suspense` pattern as the
+  public detail page.
+- `next.config.ts`: `basePath`/`assetPrefix` from a `NEXT_BASE_PATH` build
+  env var (unset locally; the Phase 8 deploy workflow sets it to
+  `/backecast` for GitHub Pages' subpath serving).
+- `.env.example` (committed) / `.env.local` (gitignored, `NEXT_PUBLIC_API_URL`
+  pointed at `http://localhost:8989`, docker-compose's host-mapped `api`
+  port) — had to add `!.env.example` to `.gitignore`, since create-next-app's
+  default `.env*` glob would've swallowed it too.
+
+**Decisions:**
+- **Streaming: presigned GET, not CloudFront.** `EpisodesService._with_audio_url()`
+  swaps each episode's `audio_key` for a fresh presigned S3 GET URL
+  (1h expiry) at read time, for both the public and admin routes. Chosen
+  over standing up a CloudFront distribution in front of the media bucket:
+  zero new billable resources, reuses the presigned-URL pattern already
+  established for uploads (`shared/s3.py`), and — the thing that actually
+  matters for "Done when: seeking works" — a presigned S3 GET already
+  serves byte-range requests with no extra configuration, which is what
+  makes an HTML5 `<audio>` scrub bar work. Trade-off, worth revisiting
+  later: the URL expires (fine — it's re-signed on every page load) and
+  isn't edge-cached (fine at MVP traffic; CloudFront's free tier — 1TB
+  egress/month for the first 12 months, then per-GB after — would still be
+  cheap if this ever needs to change, and CloudFront isn't on CLAUDE.md's
+  forbidden list, just judged unnecessary for now). **No infra/CDK changes
+  in this phase, no new billable resource.**
+- **Pagination: reuse GSI1 + FilterExpression, not a new status-keyed GSI.**
+  `list_published_page()` queries the same `GSI1` (`GSI1PK="EPISODE"`,
+  sorted by `{created_at}#{id}`) every other list already uses, filtering
+  to `status=published` server-side instead of adding a `GSI2` keyed by
+  status. The honest trade-off: DynamoDB's `Limit` caps items *scanned*
+  per call, not items *returned* after the filter, so a page can come back
+  with fewer than the requested `limit` (even zero) while `cursor` is still
+  non-`None` — the client just asks again (the public list page's cursor
+  loop already does this transparently). Rejected the `GSI2` alternative
+  because every status transition (the worker's `_transition()`, this
+  phase's new `publish()`) would then have to keep a second index
+  attribute in sync, and this table's episode count is nowhere near where
+  that scan waste would matter. Revisit if the catalog grows large.
+- **Cursor shape:** opaque, base64-encoded JSON wrapping DynamoDB's raw
+  `LastEvaluatedKey` (`PK`/`SK`/`GSI1PK`/`GSI1SK`) — clients pass it back
+  verbatim, never construct or decode it, so the DynamoDB key shape never
+  leaks into the API contract.
+- **Episode id in the URL as a query param, not a dynamic route segment,**
+  on both the public detail page and the admin review page — the standard
+  reason static export can't `generateStaticParams` ids it doesn't know
+  about at build time.
+- Admin auth stays exactly as simple as the spec asks: one shared key,
+  typed once, held in `localStorage`, sent as `X-Admin-Key`. No session,
+  no expiry, no rotation UI — consistent with the backend's existing
+  single-SSM-parameter admin key story.
+
+**Learned:** _(Igor fills this in)_
+
+**Open questions:**
+- Full browser click-through (upload → review → publish → stream) wasn't
+  possible in this sandbox: the presigned POST/GET URLs LocalStack signs
+  point at `http://localstack:4566`, which only resolves *inside* the
+  compose network, not from a browser on the host — the same limitation
+  the Phase 3 integration tests' docstring already calls out for
+  `httpx`. Validated instead via `docker compose run --rm api uv run
+  pytest tests/integration` (23/23 passing, including all new Phase 6
+  tests) plus a clean `npm run build` (both with and without
+  `NEXT_BASE_PATH` set). Igor should do one real click-through once the
+  stack is deployed (or by running the frontend inside the compose network,
+  e.g. `docker compose run` with an extra service — not set up here, kept
+  minimal per the "don't gold-plate" instruction).
+- No rate limiting or expiry warning on presigned GET URLs — a very long
+  playback session (>1h) would need the page reloaded to get a fresh URL.
+  Not addressed; low priority for MVP traffic.
+
+**Next step:** Phase 7 — E2E tests (Playwright, in a new `e2e/` uv project,
+AI-built per manual.md). Before that, Igor's out-of-band steps to actually
+try Phase 6: (1) enable GitHub Pages (repo Settings → Pages, source:
+GitHub Actions — no CDK involved); (2) `cdk deploy` the stacks once ready to
+get a real API Gateway URL; (3) set `NEXT_PUBLIC_API_URL` in
+`frontend/.env.local` (local dev) or as a build-time env var in the future
+CI deploy workflow (Phase 8) to that URL; (4) `NEXT_BASE_PATH=/backecast`
+for the GitHub Pages build specifically. Read `manual.md`'s Phase 7 section
+in full before starting.
+
+---
+
 ## Session 6 — 2026-08-22 — Phase 5: AI transcription + LangChain metadata generation
 **Built:** the worker's Phase 4 stub middle (`processing` → sleep →
 `processed-stub`) is replaced with the real pipeline: ffmpeg preprocessing →
