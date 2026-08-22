@@ -8,6 +8,7 @@ presigned URL nobody outside the compose network can reach.
 """
 
 import os
+import subprocess
 
 import boto3
 import httpx
@@ -42,3 +43,37 @@ def dynamodb_table():
 @pytest.fixture
 def s3_client():
     return boto3.client("s3", region_name="sa-east-1", endpoint_url=LOCALSTACK_ENDPOINT)
+
+
+@pytest.fixture
+def tiny_audio_bytes() -> bytes:
+    """A real (tiny, ~1s, silent) mp3 — Phase 5's worker runs it through
+    real ffprobe/ffmpeg (worker/audio.py), so `b"fake-audio-bytes"` (good
+    enough for Phase 4's stub, which never opened the file) won't do: ffprobe
+    would fail to read a duration from it and the episode would end up
+    `failed`, not `review`. Generated at test time via ffmpeg's `lavfi`
+    silence source rather than committing a binary fixture to the repo — the
+    `api` container this test runs in has ffmpeg installed for exactly this
+    reason (see backend/Dockerfile).
+    """
+    result = subprocess.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            "anullsrc=r=8000:cl=mono",
+            "-t",
+            "1",
+            "-q:a",
+            "9",
+            "-f",
+            "mp3",
+            "pipe:1",
+        ],
+        capture_output=True,
+        check=True,
+        timeout=30,
+    )
+    return result.stdout

@@ -2,22 +2,59 @@
 
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, HttpUrl
 
 
 class EpisodeStatus(str, Enum):
     """Lifecycle states an episode item moves through.
 
-    UPLOADING (Phase 3) -> PROCESSING -> PROCESSED_STUB (Phase 4 — the
-    worker just proves the S3 -> SQS -> worker wiring end to end; no AI
-    yet). Later phases (AI metadata generation, publishing) add REJECTED,
-    FAILED, REVIEW, PUBLISHED. Declared as a str-enum now so schemas are
-    typed while the value stored in DynamoDB stays a plain string.
+    UPLOADING (Phase 3) -> PROCESSING (Phase 4 wiring proof) -> Phase 5's
+    real AI chain: TRANSCRIBING -> GENERATING -> REVIEW. REJECTED is a
+    terminal state reached straight from PROCESSING when ffmpeg's duration
+    probe finds the upload over the transcription-length cap (no
+    transcription attempt, no cost). FAILED is terminal for any other
+    unrecoverable error at any stage — the worker lets the SQS message go
+    to the DLQ rather than swallowing the exception, so a human can inspect
+    why. PUBLISHED (a human moving a REVIEW episode live) is a later phase.
+    Declared as a str-enum so schemas are typed while the value stored in
+    DynamoDB stays a plain string.
     """
 
     UPLOADING = "uploading"
     PROCESSING = "processing"
-    PROCESSED_STUB = "processed-stub"
+    TRANSCRIBING = "transcribing"
+    GENERATING = "generating"
+    REVIEW = "review"
+    REJECTED = "rejected"
+    FAILED = "failed"
+
+
+class Resource(BaseModel):
+    """One link surfaced alongside an episode (show notes, mentioned tools, etc.).
+
+    `HttpUrl` (not `str`) is deliberate: it's the Pydantic validation that
+    Phase 5's mandatory sabotage exercise leans on — an LLM (or a stubbed
+    one, for the exercise) returning a malformed URL or a missing field
+    fails *here*, before anything is persisted, rather than silently
+    storing garbage a public episode page would later render as a dead or
+    dangerous link.
+    """
+
+    label: str
+    url: HttpUrl
+
+
+class EpisodeMetadata(BaseModel):
+    """The LangChain metadata chain's structured output shape.
+
+    `.with_structured_output(EpisodeMetadata)` makes the LLM call return
+    (or raise, on a shape mismatch) an instance of exactly this model —
+    Pydantic validates it before a single field is written to DynamoDB.
+    """
+
+    title: str
+    description: str
+    resources: list[Resource] = []
 
 
 class GetEpisodeSchema(BaseModel):

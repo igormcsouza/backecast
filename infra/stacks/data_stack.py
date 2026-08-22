@@ -71,3 +71,26 @@ class DataStack(Stack):
             parameter_name=f"/backecast/{stage}/admin-key",
             string_value="changeme-placeholder",
         )
+
+        # Same pattern, two more placeholder secrets for Phase 5's worker:
+        # the OpenAI API key (transcription, worker/transcription.py) and
+        # the chat-model provider's API key (metadata generation,
+        # worker/metadata.py). Two separate parameters — not one shared
+        # "LLM key" — because the provider-swap seam (settings.llm_model,
+        # e.g. "openai:gpt-4o-mini" vs "anthropic:claude-3-5-haiku-latest")
+        # means the metadata chain's key may belong to a different provider
+        # than the transcription key entirely. Igor sets the real values
+        # post-deploy, same as the admin key above — this task never reads
+        # or fabricates a real key.
+        self.openai_api_key_param = ssm.StringParameter(
+            self,
+            "OpenAiApiKeyParam",
+            parameter_name=f"/backecast/{stage}/openai-api-key",
+            string_value="changeme-placeholder",
+        )
+        self.llm_api_key_param = ssm.StringParameter(
+            self,
+            "LlmApiKeyParam",
+            parameter_name=f"/backecast/{stage}/llm-api-key",
+            string_value="changeme-placeholder",
+        )
