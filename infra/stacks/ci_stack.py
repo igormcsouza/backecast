@@ -24,9 +24,11 @@ against `repo:<owner>/<repo>:ref:refs/heads/<branch>` — literally this
 repo, literally the `main` branch. A workflow run in a different repo, or
 a PR branch in *this* repo, presents a `sub` claim that does not match and
 gets an "AccessDenied" from STS before any AWS API call happens. This is
-also why `deploy.yml` triggers on `push: branches: [main]` rather than
-`pull_request` — only a push to `main` ever produces a token this role
-will accept in the first place.
+also why `deploy.yml`'s `deploy-backend` job triggers on a `workflow_run`
+gated on `ci.yml` completing on `main` (not `pull_request`, and not a bare
+`push` — see that file's own header comment for why it's `workflow_run`
+specifically) — only that path ever produces a token whose `sub` claim
+resolves to `refs/heads/main`, the only ref this role will accept.
 
 Least privilege: `GithubActionsDeployRole` is granted exactly one action —
 `sts:AssumeRole` — and only onto this account's own CDK bootstrap roles
