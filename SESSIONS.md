@@ -18,6 +18,180 @@
 
 ---
 
+## Session 9 — 2026-08-23 — Phase 8: CD via GitHub OIDC
+
+**Built:** the whole deploy pipeline — push to `main` deploys backend then
+frontend, with zero long-lived AWS keys ever stored in GitHub.
+
+- `infra/stacks/ci_stack.py` (new): a small, account-wide (not per-stage)
+  `CiStack` creating a GitHub Actions OIDC provider
+  (`aws_iam.OpenIdConnectProvider`, `url="https://token.actions.githubusercontent.com"`,
+  `client_ids=["sts.amazonaws.com"]` — no thumbprint hardcoded, CDK resolves
+  it) and one IAM role (`backecast-github-actions-deploy`) whose trust
+  policy checks the GitHub-issued JWT's `sub` claim equals
+  `repo:igormcsouza/backecast:ref:refs/heads/main` exactly — no other repo
+  or branch can assume it. The role is granted exactly one permission,
+  `sts:AssumeRole`, scoped only to this account's own `cdk bootstrap` roles
+  (`cdk-hnb659fds-*-role-<account>-<region>`) — not `AdministratorAccess`,
+  not a hand-rolled Lambda/DynamoDB/S3 policy. Outputs the role ARN via
+  `CfnOutput` for Igor to paste into GitHub. Wired into `infra/app.py` as a
+  singleton stack (`Backecast-Ci`, no `stage` suffix — an IAM OIDC provider
+  is one account-level resource, not one per stage).
+- `infra/tests/test_ci_stack.py` (new): 5 CDK assertion tests — exactly one
+  OIDC provider, trust policy scoped to the right issuer/audience, the
+  deploy role's trust condition pinned to this repo+branch, its permission
+  policy scoped to this account's bootstrap roles (not `*`), and no
+  `AdministratorAccess`-shaped statement anywhere. All pass; full infra
+  suite is 26/26.
+- `.github/workflows/deploy.yml` (new): two jobs.
+  - `deploy-backend`: gated on `ci.yml` finishing successfully on `main`
+    (`workflow_run`, not a second `push: branches: [main]` trigger, to
+    avoid racing CI's own test run — see the file's header comment) →
+    `aws-actions/configure-aws-credentials` with `role-to-assume:
+    ${{ vars.AWS_DEPLOY_ROLE_ARN }}` (OIDC, `permissions: id-token:
+    write`, no secrets anywhere) → `cdk deploy "Backecast-dev-Data"
+    "Backecast-dev-Api" "Backecast-dev-Pipeline" --require-approval never`
+    (explicit stack names, not `--all` — `Backecast-Ci` is deliberately
+    never touched by the automated pipeline) → reads the `Api` stack's
+    `ApiUrl` `CfnOutput` via `aws cloudformation describe-stacks`, exposed
+    as a job output.
+  - `deploy-frontend`: `needs: deploy-backend` → `next build` with
+    `NEXT_PUBLIC_API_URL` from that job output and `NEXT_BASE_PATH=/backecast`
+    (Phase 6's existing GitHub Pages subpath convention) →
+    `actions/upload-pages-artifact` + `actions/deploy-pages`. Zero AWS
+    credentials, zero AWS actions — see Decisions below.
+
+**Decisions:**
+- **OIDC role scoping — delegate to `cdk bootstrap`'s own roles rather than
+  re-granting service permissions directly.** The alternative (write a
+  policy on `GithubActionsDeployRole` listing every Lambda/DynamoDB/S3/SQS/
+  APIGateway/SSM/ECR permission `cdk deploy` might need) duplicates
+  permissions AWS's own `cdk bootstrap` roles already carry, has to be kept
+  in sync by hand as the app grows, and is easy to get subtly wrong (too
+  broad, or missing something and breaking a deploy). Granting only
+  `sts:AssumeRole` onto `cdk-hnb659fds-*-role-<account>-<region>` is the
+  AWS-documented shape for this exact use case: the blast radius of this
+  role is bounded by whatever `cdk bootstrap` grants, which is itself
+  reviewable/auditable independent of this repo.
+- **`Backecast-Ci` is a singleton, not per-stage, and is deliberately never
+  in the automated deploy path.** An IAM OIDC provider is a single
+  account-level resource (registering the same URL twice throws), so
+  unlike Data/Api/Pipeline it doesn't take a `stage` — it's created once.
+  It's also excluded from `deploy-backend`'s `cdk deploy` call on purpose:
+  letting the automated pipeline redeploy the very stack that defines its
+  own trust policy would mean a compromised (or just buggy) workflow run
+  could rewrite who's allowed to assume the deploy role. Keeping
+  `Backecast-Ci` a permanently-manual, human-credentialed deploy closes
+  that loop.
+- **`deploy-frontend` reads the API URL via `aws cloudformation
+  describe-stacks` in `deploy-backend`, passed forward as a job `output`,**
+  rather than giving `deploy-frontend` its own AWS credentials to read the
+  stack itself. This keeps the "frontend job needs zero AWS credentials"
+  property exactly true — the one piece of AWS-shaped information it needs
+  arrives as a plain string from a job that already had permission to look
+  it up, not by frontend-deploy independently authenticating to AWS.
+- **`deploy.yml` triggers on `workflow_run` watching `ci.yml`, not its own
+  `push: branches: [main]`.** Both workflows would otherwise start racing
+  each other off the same push event, and there'd be no gate stopping a
+  broken commit's deploy from starting before CI reports it broken. GitHub
+  reports a `workflow_run`'s conclusion as `success` even when some of
+  `ci.yml`'s own path-filtered jobs skipped (skipping isn't failing), so
+  `deploy-backend`'s `if: github.event.workflow_run.conclusion == 'success'`
+  correctly still fires on, say, a frontend-only change that skipped the
+  `infra`/`backend` CI jobs.
+
+**Sabotage exercise findings (both halves run for real, not narrated):**
+
+1. *Failing test blocks a real PR.* `gh` was authenticated with `repo` +
+   `workflow` scopes against the real `igormcsouza/backecast` remote, so
+   the real-PR path was available and used (no fallback needed). On a
+   throwaway branch (`sabotage/failing-test-demo`, branched off `main`),
+   `backend/tests/test_toolchain.py` got a second test asserting `False`.
+   Pushed, and PR #2 opened against `main`
+   (`gh pr create --head sabotage/failing-test-demo --base main`).
+   `ci.yml`'s `changes` job correctly ran and matched the `backend`/`e2e`
+   path filters (skipping `frontend`/`infra`, as expected for a
+   backend-only diff); the `backend` job's `uv run pytest` step failed in
+   24s with the deliberately broken assertion, `gh pr checks 2` reported
+   `backend fail`, and `gh pr view 2` showed `mergeStateStatus: UNSTABLE`.
+   (Note: this repo has no branch-protection rule requiring the check to
+   pass before merge — a `mergeable: MERGEABLE` PR with a failing check can
+   still technically be merged via the button. That's a GitHub repo-setting
+   gap outside this task's scope, not a gap in `ci.yml` itself; worth
+   Igor turning on "require status checks to pass" in the repo's branch
+   protection settings if he wants the block to be literal, not just
+   visible.) The still-running `e2e` job (slower, not needed once
+   `backend` had already failed) was cancelled to save CI minutes. PR #2
+   was then closed and both the remote and local `sabotage/failing-test-demo`
+   branches deleted — nothing left behind in the real repo.
+2. *Broken `cdk synth` fails before any AWS call.* Locally (no push, no
+   PR — this half needs no GitHub interaction per manual.md's own
+   fallback framing), `infra/stacks/api_stack.py`'s `HttpApi(...)` call got
+   one deliberately invalid kwarg, `this_prop_does_not_exist=True`. Both
+   `uv run cdk synth` and `uv run cdk deploy --all --require-approval
+   never` failed identically and immediately with
+   `TypeError: HttpApi.__init__() got an unexpected keyword argument
+   'this_prop_does_not_exist'` — a plain Python traceback from `app.py`
+   evaluating the stack, with no AWS SDK call, no credential prompt, no
+   STS/CloudFormation error in sight. That's the exact safety property
+   Phase 8 is teaching: `deploy-backend`'s `cdk deploy` step synthesizes
+   the app *before* it ever calls AWS, so a broken stack definition on
+   `main` fails the deploy job fast and loud, never reaching (or
+   endangering) real infrastructure. The kwarg was reverted immediately
+   after (`git diff --stat` on `api_stack.py` confirms it, and `cdk
+   synth`/`pytest` both pass clean again).
+
+**Igor's one-time bootstrap (required before `deploy.yml` will ever
+succeed):**
+1. `cd infra && uv run cdk bootstrap` once, with real AWS credentials, in
+   the account/region from `cdk.json` (`693473496042` / `sa-east-1`) — if
+   not already done from an earlier phase.
+2. `uv run cdk deploy Backecast-Ci`, also with real credentials — this is
+   the one stack this session never deploys (see Decisions above). Note
+   its output, `GithubActionsDeployRoleArn`.
+3. In the GitHub repo's **Settings → Secrets and variables → Actions →
+   Variables** tab (a *variable*, not a *secret* — the role ARN isn't
+   sensitive on its own), add `AWS_DEPLOY_ROLE_ARN` = that ARN. Optionally
+   also `AWS_DEPLOY_REGION` if it should ever differ from the
+   `sa-east-1` default baked into `deploy.yml`.
+4. Also required, one-time, unrelated to AWS: enable GitHub Pages for this
+   repo (**Settings → Pages → Source: GitHub Actions**) — `deploy-frontend`
+   assumes that's already configured.
+5. From then on, every push to `main` (i.e. every merged PR) deploys
+   automatically: `deploy-backend` runs once `ci.yml` reports success,
+   `deploy-frontend` runs once `deploy-backend` finishes. Until step 2–3
+   are done, `deploy-backend`'s `configure-aws-credentials` step fails
+   cleanly with an "assume role" error (no role ARN to assume) — expected,
+   not a bug, and the failure is clearly diagnosable rather than a
+   confusing crash.
+
+**Learned:** _(Igor to fill in, in his own words)_
+
+**Open questions:**
+- No branch-protection rule currently makes a failing CI check literally
+  block the merge button (see sabotage finding #1) — worth Igor turning on
+  "require status checks to pass before merging" if the mandatory-CI-gate
+  property should be enforced by GitHub itself, not just visible in the PR
+  UI.
+- `deploy.yml`'s `workflow_run` gate depends on `ci.yml`'s workflow name
+  staying exactly `"CI"` (the `name:` field, not the filename) — a rename
+  of that field would silently stop `deploy.yml` from ever triggering.
+- `git grep -i aws_secret` still matches `docker-compose.yml`'s
+  `AWS_SECRET_ACCESS_KEY=test` (LocalStack's well-known dummy literal,
+  local-only, never a GitHub secret, pre-existing since the Phase 0/1
+  compose setup) — not a live credential and not new to this phase, but
+  flagging it explicitly since manual.md's own verification command
+  technically still matches it.
+
+**Next step:** Phase 9 — polish & stretch (optional, per manual.md: things
+like CloudFront in front of the media bucket, a custom domain, structured
+logging/observability, tightening the few "coarser than strictly needed"
+IAM grants called out in earlier phases' comments, DynamoDB TTL cleanup for
+old episodes, etc.). Everything in the mandatory phase plan (Phases 0–8) is
+now complete; Phase 9 is Igor's call on whether/what to pick up next.
+
+---
+
 ## Session 8 — 2026-08-22 — Phase 7: E2E tests (Playwright, Python)
 
 **Built:** the whole `e2e/` uv project (AI-authored end to end, per
