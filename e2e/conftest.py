@@ -65,7 +65,7 @@ def api_url() -> str:
 
 @pytest.fixture(scope="session")
 def tiny_audio_file() -> dict:
-    """A real, ~1s silent mp3, generated at test time via ffmpeg's `lavfi`
+    """A real, ~3s silent mp3, generated at test time via ffmpeg's `lavfi`
     silence source.
 
     Mirrors `backend/tests/integration/conftest.py`'s `tiny_audio_bytes`

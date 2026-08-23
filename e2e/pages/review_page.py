@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from playwright.sync_api import Page, expect
 
+from pages.common import audio_player
+
 
 class ReviewPage:
     def __init__(self, page: Page) -> None:
@@ -27,4 +29,4 @@ class ReviewPage:
         expect(self.page.get_by_text("Published.")).to_be_visible()
 
     def audio_player(self):
-        return self.page.locator("audio")
+        return audio_player(self.page)
