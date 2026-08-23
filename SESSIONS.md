@@ -18,6 +18,201 @@
 
 ---
 
+## Session 10 — 2026-08-23 — Phase 9: prod stage, PR previews, v2 backlog
+
+**Built:** the three things Igor asked for out of manual.md's optional
+Phase 9 (custom domain explicitly excluded — not asked for this round).
+
+1. **`prod` deploy stage.** No new stack files — `prod` reuses
+   Data/Api/Pipeline exactly as `dev` does, parameterized by the same
+   `stage` context mechanism (`infra/cdk.json` already had a `prod` entry
+   from Phase 1, unused until now). `infra/stacks/data_stack.py`: fixed a
+   real bug this phase surfaced — the removal-policy check was `stage ==
+   "dev"` specifically, so a `prod` stack's bucket/table correctly got
+   `RETAIN`, but so would any future non-dev stage, including the PR
+   preview stages this session adds next (which *must* be destroyable).
+   Replaced with `is_ephemeral = stage == "dev" or stage.startswith("pr-")`.
+   `infra/app.py`: added a fallback so `-c stage=pr-<number>` resolves a
+   region without a hand-authored `cdk.json` entry per PR (falls back to
+   `dev`'s region); anything else unrecognized now raises instead of
+   silently defaulting. `.github/workflows/deploy-prod.yml` (new):
+   triggered by a `v*` tag push or a `workflow_dispatch` gated on a typed
+   `confirm: deploy` input — never an automatic `push: main` the way dev's
+   `deploy.yml` is. Reuses the *same* `GithubActionsDeployRole` as dev
+   (widened trust, see below), deploys `Backecast-prod-{Data,Api,Pipeline}`,
+   tags the job with a `production` GitHub Environment (no protection rule
+   configured yet — that's a one-click repo Settings change Igor can add
+   later, not a CDK/workflow change). No `deploy-frontend-prod` job — see
+   Decisions.
+
+2. **PR preview environments.** `.github/workflows/deploy-preview.yml`
+   (new): `pull_request` (opened/synchronize/reopened/closed) against
+   `main`. `deploy-preview` job (gated on the PR being non-fork, see
+   Decisions) runs `cdk deploy` on `Backecast-pr-<number>-{Data,Api,
+   Pipeline}` (`-c stage=pr-<number>`, using the same fallback in app.py
+   above) and comments the preview API URL on the PR. `destroy-preview`
+   job fires on `closed` (merged or not) and runs `cdk destroy --force` on
+   the same three stacks in reverse order — teardown is unconditional, not
+   opt-in. `infra/stacks/ci_stack.py`: added a **second, separate** IAM
+   role, `GithubActionsPreviewDeployRole` (`backecast-github-actions-
+   preview`), trusted only for the `pull_request` event's OIDC `sub` claim
+   (`repo:igormcsouza/backecast:pull_request`) — the main deploy role's
+   trust policy is untouched by this addition (it only gained the prod tag
+   pattern, above). Also widened the main role's trust condition to a
+   `StringLike` list accepting both `refs/heads/main` and `refs/tags/v*`.
+   `infra/tests/test_ci_stack.py`: two new tests for the preview role's
+   trust condition and its bootstrap-role-only permission policy, plus the
+   main role's trust test updated for the two-claim list and the role-
+   count test bumped 2 -> 3. `infra/tests/test_data_stack.py`: two new
+   tests (`pr-999` stage is destroyable, `prod` stage is retained). Full
+   infra suite: 30/30 passing. `cdk synth -c stage=dev`, `-c stage=prod`,
+   and `-c stage=pr-42`/`pr-999` all succeed cleanly.
+
+3. **v2 backlog recorded, not built** — see the dedicated section below.
+
+**Decisions:**
+- **Prod trigger: tag push or confirmed manual dispatch, widening the
+  existing deploy role rather than minting a new one.** A tag push or a
+  workflow-dispatch run both already require repo write access to
+  trigger at all — there's no "any random contributor" trust problem the
+  way there is for PRs, so reusing `GithubActionsDeployRole` (one extra
+  `StringLike` claim, `refs/tags/v*`) is the right amount of ceremony:
+  same audited role, same bootstrap-role-only permission policy, one more
+  accepted ref shape. This is the literal teaching point of "dev auto-
+  deploys because it's cheap to break; prod needs a deliberate human
+  release event, not automatic-on-merge" — the *mechanism* enforcing that
+  is the trust condition on a JWT claim a workflow can't forge, not a
+  process rule someone has to remember to follow.
+- **PR previews get a *separate*, more tightly-scoped role, not a further
+  widened deploy role.** The `pull_request` event's OIDC `sub` claim
+  (`repo:<owner>/<repo>:pull_request`) can't identify *which* PR triggered
+  it — only "some pull_request event fired in this repo." Trusting that
+  claim on the same role that can deploy prod would mean every open PR
+  effectively has a path to prod-capable credentials. A dedicated
+  `GithubActionsPreviewDeployRole`, trusted only for that claim and never
+  for `refs/heads/main`/`refs/tags/v*`, keeps a leaked/misused preview
+  credential from ever satisfying the main role's trust condition, and
+  vice versa. Honest caveat, written into `ci_stack.py`'s own docstring:
+  both roles still bottom out at the *same* `cdk bootstrap` roles (the
+  default bootstrap's `cfn-exec` role is close to account-admin — that's
+  how vanilla `cdk bootstrap` is designed, single-tenant), so this is
+  trust-layer isolation, not IAM-permission-layer isolation. True stack-
+  name-scoped IAM enforcement would need a custom bootstrap with a
+  permissions boundary restricting the bootstrap roles to
+  `Backecast-pr-*` resources — real, worthwhile follow-on hardening, out
+  of scope this phase, noted here rather than silently skipped.
+- **The actual security boundary for PR previews is layered, and the
+  `pull_request` (never `pull_request_target`) choice is the load-bearing
+  one.** `pull_request` runs the workflow file and code exactly as the PR
+  branch has them, in an isolated context with no repo secrets and no
+  `id-token: write` grant for fork-originated runs (GitHub platform
+  default). The explicit `head.repo.full_name == github.repository` check
+  in both jobs' `if:` is deliberate defense in depth on top of that
+  default, not redundant with it — it means this workflow enforces the
+  boundary itself rather than only relying on remembering why the
+  platform default holds. `pull_request_target` was never considered; it
+  would run the *base* branch's workflow against the PR's code with full
+  secret access — the textbook way this class of repo gets owned.
+- **Prod is backend-API-only for now — no `deploy-frontend-prod` job.**
+  GitHub Pages serves exactly one live site per repo; there's no built-in
+  second "environment" the way some other static hosts offer preview
+  slots. Standing up a genuinely separate prod frontend would mean either
+  a second repo or hand-rolling an S3+CloudFront static host — real new
+  infrastructure, and the latter is specifically the kind of thing
+  CLAUDE.md's cost-guardrail list steers away from without a stated need.
+  Igor didn't ask for a second live frontend this round (custom domain is
+  explicitly out of scope too), so `prod` here means: a second, promotable
+  backend API stack exists and can be deployed on a real release trigger;
+  the single GitHub Pages frontend keeps pointing at dev's API until a
+  concrete reason (custom domain, or an actual prod frontend need) puts
+  that back in scope.
+- **Cost (CLAUDE.md guardrail):** `prod` is a second full copy of Data/Api/
+  Pipeline — second S3 bucket, DynamoDB table, Lambda functions, SQS
+  queue+DLQ. Every one of those is free-tier-eligible in isolation (same
+  resources as dev, same pricing), so two of everything is still $0 at
+  rest — but it genuinely is twice as much of everything, and once real
+  OpenAI/LLM keys exist, prod's worker invocations bill per-use exactly
+  like dev's would. PR preview stacks are the same shape again, times
+  however many PRs are open at once — which is exactly why unconditional
+  teardown on PR close (not "when someone remembers to clean up") matters
+  for this project's free-tier discipline, not just for tidiness. Nothing
+  in this session was actually deployed — no real AWS credentials exist in
+  this sandbox, same constraint as every phase since Phase 4; the
+  verification bar was `cdk synth` (dev/prod/pr-42/pr-999, all clean) plus
+  the CDK assertion suite (30/30).
+
+**Learned:** _(placeholder — Igor fills this in, in his own words)_
+
+**Open questions:**
+- No branch-protection rule on `main` requires CI to pass before merge
+  (noted already in Session 9's sabotage-exercise findings) — worth
+  revisiting now that `prod` is a real, reachable deploy target, since a
+  bad merge to `main` is one `git push origin vX.Y.Z` away from prod.
+- The `production` GitHub Environment referenced in `deploy-prod.yml` has
+  no required-reviewers rule configured (can't be done from this sandbox —
+  it's a repo Settings change, not a code change). Recommended follow-up:
+  Igor adds one manually so a prod deploy needs a second human's approval,
+  not just the confirm-input typo-guard this workflow already has.
+- `AWS_PREVIEW_ROLE_ARN` (the new preview role's ARN, output by
+  `Backecast-Ci` as `GithubActionsPreviewDeployRoleArn`) needs to be added
+  as a repo Actions variable the same way `AWS_DEPLOY_ROLE_ARN` was in
+  Phase 8 — Igor's one-time bootstrap step, not something this session can
+  do without real AWS credentials.
+- True IAM-level tenant isolation for PR previews (a custom `cdk bootstrap`
+  with a permissions boundary scoping the bootstrap roles to
+  `Backecast-pr-*`) is real hardening this phase didn't build — flagged
+  in `ci_stack.py`'s docstring and above, not silently glossed over.
+
+**Next step:** there is no queued Phase 10 — Phases 0 through 9
+(including this session's requested-optional slice) are the full plan
+`manual.md` laid out, and it's done. Future work is either something from
+the v2 backlog below, or whatever Igor wants to build next; the honest
+next action for a future session is to ask him, not to invent a phase.
+
+---
+
+### v2 backlog (recorded, not built — per Igor's explicit "record, not
+build" scope for this session)
+
+- **RSS feed.** A per-podcast RSS/XML endpoint (probably a new read path
+  in `backend/app`, generated from the same DynamoDB episode records the
+  streaming page already reads) so the show is subscribable in real
+  podcast apps, not just the web page. Touches: a new API route,
+  an XML-serialization layer, and — if it needs to be pre-generated rather
+  than built per-request — a place to cache/store it (S3 is the natural
+  fit, same bucket or a new one).
+- **Transcoding/normalization with ffmpeg, beyond Phase 5's transcription
+  prep.** Phase 5's worker already shells out to ffmpeg just enough to get
+  a clean audio stream for the OpenAI transcription call; a v2 pass would
+  add real output-side transcoding (consistent bitrate/format for the
+  *published* audio file, loudness normalization) as its own step.
+  Touches: `backend/app/worker` (a new pipeline step or a second worker),
+  and possibly a second S3 object per episode (raw upload vs. published/
+  normalized file).
+- **EventBridge fan-out.** Right now Phase 5's pipeline is a single
+  linear chain: S3 upload -> SQS -> one worker Lambda doing transcription
+  *and* metadata generation in one invocation. manual.md itself calls
+  EventBridge fan-out (one event, multiple independent consumers — e.g. a
+  transcript-ready job and an RSS-rebuild job triggered off the same
+  "episode published" event) the natural "lesson two" of event-driven
+  architecture after Phase 5's "lesson one" (SQS, idempotency, DLQ,
+  visibility timeout). Good teaching hook for a future session: it's the
+  natural next step once there's a second thing (RSS) that needs to react
+  to "an episode just got published" independently of the transcription
+  worker. Touches: a new `infra/stacks` construct (EventBridge bus/rules),
+  and splitting today's single worker Lambda into two or more
+  event-triggered consumers.
+- **Cognito auth.** Today's "admin" write path is a single shared secret
+  (the SSM `admin-key` parameter, checked by the API) — fine for a
+  single-operator MVP, not a real multi-user auth story. Cognito would
+  replace that with real user accounts/sessions (a User Pool, JWT
+  verification in the API's auth dependency). Touches: a new
+  `infra/stacks/auth_stack.py` (or folded into `ApiStack`), API Gateway's
+  authorizer wiring, and `backend/app`'s current admin-key dependency
+  swapped for a Cognito-JWT one.
+
+---
+
 ## Session 9 — 2026-08-23 — Phase 8: CD via GitHub OIDC
 
 **Built:** the whole deploy pipeline — push to `main` deploys backend then

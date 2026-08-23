@@ -1,0 +1,117 @@
+# Phase 9 — the dev -> prod promotion pattern.
+#
+# deploy.yml's `deploy-backend` job deploys `dev` on *every* push to
+# `main` — that's deliberate: dev is cheap to break (nobody depends on it,
+# the next merge fixes it forward), so the fastest possible feedback loop
+# (merge -> live in minutes, no extra step) is the right trade there.
+#
+# `prod` earns none of that same trust automatically. A prod deploy has to
+# be a *deliberate, human-initiated release event* — this workflow only
+# ever runs from one of two triggers, both of which require someone to
+# take an explicit action beyond "merge a PR":
+#
+#   1. `push: tags: v*` — pushing a version tag (`git push origin v0.1.0`)
+#      is the classic "cut a release" gesture: a human decided *this*
+#      commit, not just "whatever main happens to be right now", is what
+#      goes to prod.
+#   2. `workflow_dispatch` with a typed confirmation input — someone opens
+#      this workflow in the GitHub Actions UI (or `gh workflow run`) and
+#      has to type the word "deploy" into the `confirm` input for the job
+#      to actually run. A stray click on "Run workflow" without typing the
+#      confirmation does nothing (see the job's `if:` below).
+#
+# Both paths reuse the *exact same* `GithubActionsDeployRole` that
+# deploy.yml uses for dev — see ci_stack.py's module docstring ("Phase 9")
+# for why this is a widened trust condition on one role (an extra `sub`
+# claim shape, `refs/tags/v*`) rather than a second role: unlike PR
+# previews, a tag push or manual dispatch is still gated behind repo write
+# access (you need permission to push a tag or trigger a workflow run at
+# all), so there's no "any random PR" trust problem to isolate against
+# here the way there is for deploy-preview.yml.
+#
+# Cost note (CLAUDE.md guardrail): this stands up a *second* full copy of
+# Data/Api/Pipeline — a second S3 bucket, DynamoDB table, Lambda functions,
+# SQS queue+DLQ. Every one of those is free-tier-eligible in isolation
+# (same as dev), so `prod` alongside `dev` is still $0 at rest — but it is
+# genuinely twice as much of everything, and worker invocations that use
+# real OpenAI/LLM keys (once Igor sets them) bill per-use same as dev's
+# would. See SESSIONS.md for the full writeup — this workflow is the
+# *capability* to promote to prod; nothing here has actually been deployed
+# by this session (no real AWS credentials exist in this sandbox).
+name: CD (prod)
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: >-
+          Type "deploy" to confirm a production deploy. Anything else
+          (including leaving this blank) aborts before any AWS call.
+        required: true
+
+jobs:
+  deploy-backend-prod:
+    # Belt-and-suspenders on top of the trigger itself: even a manual
+    # dispatch aborts unless the human typing it also typed the
+    # confirmation word — catches a fat-fingered "Run workflow" click on
+    # the wrong workflow.
+    if: >-
+      github.event_name == 'push' ||
+      github.event.inputs.confirm == 'deploy'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # required to request the GitHub OIDC token — see ci_stack.py
+      contents: read
+    environment:
+      # No required-reviewers rule exists on this yet (that's a repo
+      # Settings -> Environments change Igor can make later, not something
+      # CDK or this file can configure) — but naming the environment now
+      # means turning on "required reviewers" for `production` is a
+      # zero-code follow-up, not a workflow rewrite.
+      name: production
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: infra/uv.lock
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm i -g aws-cdk
+
+      # Same role as dev (deploy.yml) — see this file's header comment for
+      # why prod doesn't get a separate role the way PR previews do.
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_DEPLOY_REGION || 'sa-east-1' }}
+
+      # Explicit `prod`-stage stack names — `Backecast-Ci` is still never
+      # touched by any automated workflow, same reasoning as dev's deploy
+      # job (see deploy.yml).
+      - run: >
+          uv run cdk deploy
+          "Backecast-prod-Data" "Backecast-prod-Api" "Backecast-prod-Pipeline"
+          --require-approval never
+
+  # No `deploy-frontend-prod` job here — deliberately. GitHub Pages serves
+  # exactly one live site per repo (github.io/<repo>, or a custom domain
+  # bound to it); there's no first-class "second environment" the way
+  # Vercel/Netlify preview deploys work, and standing up a *second* GitHub
+  # Pages-shaped static host (a second repo, or a second branch deployed
+  # via a hand-rolled S3+CloudFront setup this project has specifically
+  # avoided per CLAUDE.md's cost guardrails) is real new infrastructure,
+  # not a promotion-pattern exercise — out of scope for what Igor asked
+  # for this phase. Concretely: `prod` here means the *backend API* is a
+  # separate, promotable deployment; the frontend stays a single GitHub
+  # Pages site (pointed at dev's API today) until a custom domain or a
+  # second static host is explicitly in scope. See SESSIONS.md for this
+  # reasoning written out in full.

@@ -1,0 +1,175 @@
+# Phase 9 — ephemeral, per-PR preview environments.
+#
+# A `pull_request` workflow that deploys real AWS infrastructure is a
+# well-known attack surface: a malicious PR could otherwise turn "open a
+# PR" into "run arbitrary code with access to deploy credentials." This
+# file leans on several layers of defense, deliberately redundant with
+# each other (see ci_stack.py's module docstring, "Phase 9", for the IAM
+# side of this):
+#
+#   1. The trigger is `pull_request`, never `pull_request_target`. A
+#      `pull_request`-triggered run executes the PR's *own* code (this
+#      file, and everything under infra/, exactly as the PR branch has
+#      them) in an isolated context — a `pull_request_target` run would
+#      instead execute the *base* branch's workflow file but with the PR's
+#      code checked out, which is the classic way repos get owned: an
+#      attacker's PR-branch code runs with the *target* repo's secrets.
+#      There's no reason for this workflow to ever become
+#      `pull_request_target`.
+#   2. GitHub does not hand a `pull_request`-triggered run repository
+#      secrets, or grant `permissions: id-token: write`'s OIDC token, to a
+#      workflow run triggered by a PR from a *fork* — by platform default.
+#      A fork PR's `deploy-preview`/`destroy-preview` job below would fail
+#      to even request an AWS token, before anything in this file runs.
+#   3. Belt-and-suspenders on top of (2), not redundant with it: both jobs
+#      below also explicitly gate on
+#      `github.event.pull_request.head.repo.full_name == github.repository`
+#      in their own `if:`. This is deliberate defense in depth — (2) is a
+#      platform default that could in principle be misconfigured, changed,
+#      or misunderstood by a future edit to this file; re-checking the
+#      condition explicitly here means this workflow doesn't *rely* on
+#      remembering why (2) is true, it enforces the same boundary itself.
+#   4. IAM-side: a *separate*, more tightly trusted role
+#      (`GithubActionsPreviewDeployRole`, not the same role dev/prod use)
+#      whose trust policy accepts only the `pull_request` event's `sub`
+#      claim — see ci_stack.py's module docstring for the full reasoning,
+#      including the honest limit of what that isolation actually buys
+#      given `cdk bootstrap`'s own default permissions.
+#   5. Workflow-level stack-name discipline: every `cdk deploy`/`cdk
+#      destroy` call below only ever names `Backecast-pr-<number>-*`
+#      stacks — `dev`/`prod` stack names never appear in this file.
+#
+# Teardown (destroy-preview) is not optional. Leaving a preview stack
+# running after its PR closes is exactly the kind of cost/clutter
+# accumulation the free-tier discipline elsewhere in this repo has
+# avoided — see CLAUDE.md's cost guardrail. `types: [closed]` fires
+# whether the PR was merged or simply closed unmerged, so every preview
+# stack this workflow ever creates gets torn down exactly once.
+name: PR Preview
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, closed]
+
+# One run per PR at a time, and a superseded run for the same PR (e.g. a
+# fast second push before the first preview finished deploying) cancels
+# cleanly instead of two `cdk deploy`/`cdk destroy` calls racing the same
+# stack.
+concurrency:
+  group: pr-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  deploy-preview:
+    if: >-
+      github.event.action != 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # OIDC token for GithubActionsPreviewDeployRole — see header comment (4)
+      contents: read
+      pull-requests: write # to leave the preview-ready comment below
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      # No `ref:` override — the default for a `pull_request` event is the
+      # PR's own merge commit, which is exactly the "runs the PR's own
+      # code" property header comment (1) is about.
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: infra/uv.lock
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm i -g aws-cdk
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_PREVIEW_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_DEPLOY_REGION || 'sa-east-1' }}
+
+      # `-c stage=pr-<number>` flows through the same stage-parameterization
+      # mechanism app.py already uses for dev/prod (see app.py's fallback
+      # for stages with no cdk.json context entry) — the stack names below
+      # (`Backecast-pr-<number>-*`) are exactly what that produces.
+      - run: >
+          uv run cdk deploy
+          "Backecast-pr-${{ github.event.pull_request.number }}-Data"
+          "Backecast-pr-${{ github.event.pull_request.number }}-Api"
+          "Backecast-pr-${{ github.event.pull_request.number }}-Pipeline"
+          -c stage=pr-${{ github.event.pull_request.number }}
+          --require-approval never
+
+      - name: Read the preview API URL from the Api stack's CfnOutput
+        id: api_url
+        run: |
+          URL=$(aws cloudformation describe-stacks \
+            --stack-name "Backecast-pr-${{ github.event.pull_request.number }}-Api" \
+            --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" \
+            --output text)
+          echo "value=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Comment the preview API URL on the PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" \
+            --body "Preview API deployed: ${{ steps.api_url.outputs.value }} (stage \`pr-${{ github.event.pull_request.number }}\`, torn down automatically when this PR closes)."
+
+  destroy-preview:
+    if: >-
+      github.event.action == 'closed' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      # Checked out at the base branch (`main`), not the PR head — a
+      # closed-unmerged PR's branch may already be gone by the time this
+      # runs, and destroying doesn't need the PR's own code, only this
+      # repo's current CDK app to know what stack names/constructs to ask
+      # CloudFormation to tear down.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: infra/uv.lock
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm i -g aws-cdk
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_PREVIEW_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_DEPLOY_REGION || 'sa-east-1' }}
+
+      # Reverse stack order from deploy (Pipeline/Api depend on Data, so
+      # they must go first) — `cdk destroy` doesn't auto-resolve this the
+      # way `deploy --all` resolves creation order.
+      #
+      # `|| true`: if `deploy-preview` never actually ran for this PR (a
+      # fork PR that got gated out at the `if:` above, or a PR closed
+      # before its first push finished deploying), there's nothing to
+      # destroy — CloudFormation reports "stack does not exist" and `cdk
+      # destroy` exits non-zero. That's an expected, harmless case here,
+      # not a real failure worth failing this job over.
+      - run: >
+          uv run cdk destroy --force
+          "Backecast-pr-${{ github.event.pull_request.number }}-Pipeline"
+          "Backecast-pr-${{ github.event.pull_request.number }}-Api"
+          "Backecast-pr-${{ github.event.pull_request.number }}-Data"
+          -c stage=pr-${{ github.event.pull_request.number }}
+          || true

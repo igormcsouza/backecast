@@ -1,6 +1,13 @@
 # Phase 8 — continuous deployment. Every push to `main` (i.e. every merge)
-# deploys the whole stack automatically, with zero long-lived AWS keys ever
-# stored in GitHub. Two ideas worth reading before touching this file:
+# deploys the whole `dev` stack automatically, with zero long-lived AWS
+# keys ever stored in GitHub. This file is deliberately the *only* trigger
+# shaped like that: Phase 9 added two siblings that reuse the same
+# OIDC/CDK machinery but on very different triggers — `deploy-prod.yml`
+# (a `v*` tag push or a confirmed manual dispatch, never an automatic
+# `push: main`) and `deploy-preview.yml` (per-PR ephemeral stacks, its own
+# more tightly-scoped IAM role). See those files' own header comments for
+# why dev alone gets the "every merge" treatment. Two ideas worth reading
+# before touching this file:
 #
 # 1. GitHub OIDC -> AWS IAM role (deploy-backend, below). The old way to
 #    let a CI job call AWS is an IAM user + access key pair pasted into

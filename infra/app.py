@@ -10,6 +10,25 @@ app = cdk.App()
 
 stage = app.node.try_get_context("stage") or "dev"
 ctx = app.node.try_get_context(stage)
+
+# Phase 9: PR preview stages (`pr-<number>`, one per open PR — see
+# .github/workflows/deploy-preview.yml) can't have a hand-authored entry in
+# cdk.json's `context` block the way `dev`/`prod` do — nobody edits this
+# file every time a PR is opened. Any stage matching that pattern falls
+# back to `dev`'s region instead: same promotion mechanism (`-c stage=...`
+# selects a stack-name prefix and a region), just without requiring a
+# static context entry per PR number. Anything else unrecognized is a
+# real mistake (a typo'd `-c stage=`), not a case to silently paper over.
+if ctx is None:
+    if stage.startswith("pr-"):
+        ctx = {"region": app.node.try_get_context("dev")["region"]}
+    else:
+        raise ValueError(
+            f"Unknown stage {stage!r} — add it to infra/cdk.json's `context` "
+            "block (like `dev`/`prod`), or use a `pr-<number>` stage name "
+            "for an ephemeral PR preview environment."
+        )
+
 env = cdk.Environment(account=app.node.try_get_context("account"), region=ctx["region"])
 
 data_stack = DataStack(app, f"Backecast-{stage}-Data", stage=stage, env=env)
@@ -38,6 +57,13 @@ PipelineStack(
 # of deploy.yml's automated `cdk deploy` (Phase 8): a workflow can't grant
 # itself the AWS trust it's about to be scoped by, so this one stack is a
 # one-time manual bootstrap for Igor. See SESSIONS.md for the exact steps.
+#
+# Phase 9 note: `prod` and PR previews do NOT get their own `CiStack`. The
+# OIDC provider is still one account-level resource, and the *trust*
+# needed for prod (a tag-push `sub` claim) and for previews (a
+# `pull_request`-event `sub` claim, on a separate, more tightly-scoped
+# role) are both changes to *this same* stack's IAM resources, not new
+# per-stage stacks — see ci_stack.py's module docstring for the reasoning.
 CiStack(
     app,
     "Backecast-Ci",
