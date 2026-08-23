@@ -18,6 +18,157 @@
 
 ---
 
+## Session 8 — 2026-08-22 — Phase 7: E2E tests (Playwright, Python)
+
+**Built:** the whole `e2e/` uv project (AI-authored end to end, per
+CLAUDE.md/manual.md — Igor's role is to review and run it), plus what it
+took to actually give it something real to drive.
+
+- `e2e/pyproject.toml`: `pytest`, `pytest-playwright` (pulls in
+  `pytest-base-url`), `httpx`, `ruff` (dev). `addopts = "--browser
+  chromium"` — headless Chromium only, stated explicitly (see
+  `conftest.py`'s docstring for why one browser target is enough for this
+  MVP).
+- `e2e/conftest.py`: `base_url` (from `FRONTEND_URL`), `admin_key` (from
+  `ADMIN_KEY`, defaults to the seeded `local-dev-admin-key`), `api_url`,
+  and `tiny_audio_file` — a real ~3s silent mp3 generated at test time via
+  ffmpeg's `lavfi` silence source (mirrors
+  `backend/tests/integration/conftest.py`'s `tiny_audio_bytes` fixture and
+  exists for the identical reason: the worker's real ffprobe/ffmpeg step
+  rejects fake bytes), returned as Playwright's `set_input_files`
+  dict shape (in-memory, no temp file).
+- `e2e/pages/`: three small page objects (`AdminPage`, `ReviewPage`,
+  `PublicHomePage`/`PublicEpisodePage`) — locators plus the handful of
+  actions a test performs, deliberately thin (no result-object/builder
+  layers) for an app this size.
+- `e2e/tests/`: `test_admin_login.py` (wrong key rejected, correct key
+  reaches the dashboard), `test_public_page.py` (home page renders; an
+  unknown episode id 404s, covering the "never confirm an unpublished
+  episode exists" contract for the "doesn't exist" half), and
+  `test_episode_flow.py::test_upload_edit_publish_and_stream` — the full
+  journey from manual.md's Phase 7 spec in one test (upload -> stubbed AI
+  metadata appears -> not yet public -> edit -> still not public -> publish
+  -> visible on the public page -> player loads and **seeks**, verified by
+  setting `audio.currentTime` after `loadedmetadata` and reading it back,
+  which only works because the presigned S3 GET URL actually serves byte-
+  range requests — see Session 7's streaming decision).
+- `frontend/Dockerfile` (new, E2E-only — not used by the real Phase 8
+  deploy, which pushes the static export straight to GitHub Pages):
+  `npm ci && npm run build` with `NEXT_PUBLIC_API_URL` baked in at build
+  time, then serves `out/` with `serve` (no `-s`/SPA-fallback — this is a
+  multi-page static export, not a single-page app).
+- `e2e/Dockerfile`: based on `mcr.microsoft.com/playwright/python`
+  (Chromium + all its OS deps already installed and version-matched to the
+  pinned `playwright` package) with `uv` layered on top, plus `apt-get
+  install ffmpeg` for the `tiny_audio_file` fixture.
+- `docker-compose.e2e.yml` (new override, not merged into the base
+  compose file): adds `frontend` and `e2e` services to the same
+  compose network `localstack`/`api`/`worker` already share.
+- `.github/workflows/ci.yml`: new `e2e` job (boots the compose stack with
+  the override, waits for `/api/v1/health` and the frontend root to answer,
+  runs `docker compose run --rm e2e`, dumps logs and tears down with
+  `-v` on any outcome), gated on a new `e2e` path filter covering
+  `e2e/**`, `backend/**`, `frontend/**`, both compose files, and
+  `scripts/**`.
+
+**Decisions:**
+- **The suite runs as a container on the compose network, not from the
+  bare host.** Session 7's "Open questions" already flagged this: presigned
+  S3 URLs the backend hands back are signed against
+  `http://localstack:4566`, a hostname that only resolves inside the
+  compose network's internal DNS. A browser on the host (or a Playwright
+  process launched from the host) can reach the frontend's mapped port
+  fine, but every `<audio src=...>` and every upload POST would 404/fail to
+  resolve the moment it touched a presigned URL. Running both the frontend
+  build *and* the Playwright-driven browser as containers on that same
+  network — the same "join the network, use service-name hostnames"
+  pattern `backend/tests/integration/` already uses for `httpx` — sidesteps
+  this entirely and, as a bonus, exercises the *exact* URLs a real browser
+  in a real deployment would receive, not a workaround shaped around the
+  sandbox. Verified this is a real bug, not a hypothetical: the first
+  attempt using a plain `playwright install --with-deps chromium` on the
+  bare host failed outright (no passwordless `sudo` for the apt
+  dependencies in this sandbox) — using the official Playwright Docker
+  image sidesteps that too, for free.
+- **Frontend served via a dedicated `frontend/Dockerfile` (E2E-only), not
+  `next dev` or `next start`.** `next start` doesn't apply to an
+  `output: 'export'` build (there's no Node server artifact to start) and
+  `next dev` would mean testing an unoptimized dev-mode bundle instead of
+  the actual static export GitHub Pages will serve in Phase 8. A plain
+  `serve out/` after `npm run build` tests the real artifact.
+- **`docker-compose.e2e.yml` as an override, not merged into
+  `docker-compose.yml`.** Keeps `docker compose up -d` — the command
+  Igor's used since Phase 0 for local dev — unchanged; the E2E stack (a
+  one-shot frontend build + a one-shot test container) is opt-in via
+  `-f docker-compose.yml -f docker-compose.e2e.yml`.
+- **One big flow test, not five small ones, for the actual journey.** Every
+  step after the upload genuinely depends on state the previous step left
+  behind (can't publish before `review`, can't check the public page
+  without a real published episode) — splitting it up would mean each
+  "test" quietly re-running the same setup or sharing state through an
+  awkward fixture. The parts that *do* stand alone (the login gate, the
+  404-for-unknown-id contract) got their own small, fast test files instead.
+- **CI job gated on a wide path filter** (`e2e/**` plus `backend/**` plus
+  `frontend/**` plus both compose files) rather than just `e2e/**` — a
+  backend or frontend change is exactly the kind of thing this suite exists
+  to catch, so scoping the filter to only `e2e/**` would silently skip the
+  job on the changes that matter most.
+- Captured the just-created episode's id from the real `POST
+  /api/v1/episodes` network response (`page.expect_response`) instead of
+  scraping it from the DOM afterward — the review queue can (and, once the
+  suite has run more than once against the same LocalStack volume, does)
+  contain other episodes with the identical stubbed title, so the id is the
+  only thing that reliably identifies *this* run's upload.
+
+**A real bug found while wiring the flow (not fixed here, left for Igor to
+weigh in on):** `frontend/app/admin/page.tsx`'s `UploadStatus` component
+calls its `onDone()` callback the instant the polled status leaves
+`IN_FLIGHT_STATUSES` — which unmounts `UploadStatus` (clearing
+`activeUploadId`) in the very same render that status becomes `review`. Its
+own `{status === "review" && <Link>Review now</Link>}` branch is therefore
+dead code: it can never actually render, because the component holding it
+is gone before that branch's condition is ever true. Nothing breaks — the
+episode still lands correctly in the review-queue list below, which is
+what the E2E suite ended up waiting on instead — but the "Review now"
+shortcut Igor would see mid-poll never fires. Small, cosmetic, and outside
+the "actually blocks the E2E suite" bar this task set for touching
+`frontend/` code, so left as a note rather than a fix.
+
+**Learned:** _(Igor fills this in)_
+
+**Open questions:**
+- The suite was verified fully working (`docker compose -f
+  docker-compose.yml -f docker-compose.e2e.yml run --rm e2e`, 5/5 passed,
+  run twice in a row including the full upload -> publish -> stream -> seek
+  path) — no environment blocker to flag. The one real obstacle hit along
+  the way (host `sudo` unavailable for `playwright install --with-deps` in
+  this sandbox) is exactly what steered the "run as a container" decision
+  above, and is very likely representative of most CI runners too, not
+  just this sandbox — that's a second reason to keep the container-based
+  approach even once Igor is running this on his own machine.
+- The "Review now" dead-code link (see above) — worth a one-line fix
+  someday (swap the order: render before calling `onDone()`, or drop the
+  link and rely on the queue), but not urgent and not done here.
+- `docker-compose.e2e.yml` maps the frontend to host port 3300 purely for
+  optional manual sanity-checking; nothing in the suite depends on it (the
+  `e2e` container always talks to `frontend:3000` over the compose
+  network).
+
+**Next step:** Phase 8 — CD: automated deployment. Per manual.md: GitHub
+OIDC -> AWS IAM role (no long-lived AWS keys in GitHub), a
+`.github/workflows/deploy.yml` with `deploy-backend` (`cdk deploy` via
+OIDC) and `deploy-frontend` (needs `deploy-backend` for the API URL stack
+output; `next build` with `NEXT_PUBLIC_API_URL`/`NEXT_BASE_PATH=/backecast`
+baked in, then `actions/upload-pages-artifact` + `actions/deploy-pages` —
+no AWS credentials involved in that job at all, worth teaching as the
+contrast case), and creating the OIDC provider + deploy role in CDK
+(`infra/stacks/ci_stack.py`) rather than by hand in the console. Read
+manual.md's Phase 8 section in full before starting; Igor's out-of-band
+prerequisite is enabling GitHub Pages (repo Settings -> Pages, source:
+GitHub Actions) if not already done from Phase 6.
+
+---
+
 ## Session 7 — 2026-08-22 — Phase 6: Frontend (admin + public pages)
 **Built:** the whole `frontend/` app (Next.js App Router, static export,
 TypeScript, Tailwind) plus the backend read/edit/publish routes it needs.

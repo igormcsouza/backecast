@@ -12,6 +12,7 @@ jobs:
       backend: ${{ steps.filter.outputs.backend }}
       infra: ${{ steps.filter.outputs.infra }}
       frontend: ${{ steps.filter.outputs.frontend }}
+      e2e: ${{ steps.filter.outputs.e2e }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -24,6 +25,13 @@ jobs:
               - 'infra/**'
             frontend:
               - 'frontend/**'
+            e2e:
+              - 'e2e/**'
+              - 'backend/**'
+              - 'frontend/**'
+              - 'docker-compose.yml'
+              - 'docker-compose.e2e.yml'
+              - 'scripts/**'
 
   backend:
     needs: changes
@@ -78,3 +86,40 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
       - run: npm run build
+
+  # Phase 7: browser-level safety net. Boots the *whole* stack (LocalStack +
+  # api + worker + a static-served frontend build) via docker compose, then
+  # runs the Playwright suite against it — as a container on the same
+  # compose network, for the same reason e2e/conftest.py explains: presigned
+  # S3 URLs the backend hands back only resolve inside that network's
+  # internal DNS, so both the frontend under test and the browser driving it
+  # have to live on it, not on the runner's bare host.
+  e2e:
+    needs: changes
+    if: needs.changes.outputs.e2e == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Boot the compose stack (LocalStack, api, worker, frontend)
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.e2e.yml \
+            up -d --build localstack init api worker frontend
+
+      - name: Wait for the API and frontend to answer on their host ports
+        run: |
+          timeout 60 bash -c 'until curl -sf http://localhost:8989/api/v1/health >/dev/null; do sleep 2; done'
+          timeout 60 bash -c 'until curl -sf http://localhost:3300/ >/dev/null; do sleep 2; done'
+
+      - name: Run the E2E suite
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.e2e.yml \
+            run --rm e2e
+
+      - name: Compose logs (on failure)
+        if: failure()
+        run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml down -v
