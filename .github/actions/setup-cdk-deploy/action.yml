@@ -1,0 +1,37 @@
+name: Set up CDK deploy tooling and AWS OIDC credentials
+description: >-
+  Shared setup steps for every job that runs `cdk deploy`/`cdk destroy`
+  against real AWS (deploy.yml's deploy-backend, deploy-prod.yml's
+  deploy-backend-prod, deploy-preview.yml's deploy-preview and
+  destroy-preview). Extracted after code review flagged the four jobs
+  duplicating this block verbatim — a future tooling change (CDK version,
+  Node version, install method) now only needs editing once. Does NOT
+  include `actions/checkout`: callers check out different refs (the CI
+  commit, a release tag, the PR head, the PR's base branch), so that step
+  stays in each workflow rather than being hidden behind an input here.
+
+inputs:
+  role-to-assume:
+    description: IAM role ARN to assume via GitHub OIDC (a repo *variable*, not a secret — see the calling workflow's own comment on why that's safe).
+    required: true
+  aws-region:
+    description: AWS region to deploy into.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - uses: astral-sh/setup-uv@v5
+      with:
+        enable-cache: true
+        cache-dependency-glob: infra/uv.lock
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+    - run: npm i -g aws-cdk
+      shell: bash
+
+    - uses: aws-actions/configure-aws-credentials@v4
+      with:
+        role-to-assume: ${{ inputs.role-to-assume }}
+        aws-region: ${{ inputs.aws-region }}

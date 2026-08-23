@@ -78,18 +78,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          cache-dependency-glob: infra/uv.lock
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: npm i -g aws-cdk
-
       # Same role as dev (deploy.yml) — see this file's header comment for
       # why prod doesn't get a separate role the way PR previews do.
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: ./.github/actions/setup-cdk-deploy
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_DEPLOY_REGION || 'sa-east-1' }}

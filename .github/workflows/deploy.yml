@@ -75,20 +75,11 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          cache-dependency-glob: infra/uv.lock
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: npm i -g aws-cdk
-
       # No AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY anywhere — role-to-
       # assume is the only AWS-facing input, and it isn't a secret either
       # (an IAM role ARN grants nothing on its own without a trust policy
       # match); it's a plain repo *variable*, not a repo *secret*.
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: ./.github/actions/setup-cdk-deploy
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_DEPLOY_REGION || 'sa-east-1' }}

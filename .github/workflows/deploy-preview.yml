@@ -52,13 +52,22 @@ on:
     branches: [main]
     types: [opened, synchronize, reopened, closed]
 
-# One run per PR at a time, and a superseded run for the same PR (e.g. a
-# fast second push before the first preview finished deploying) cancels
-# cleanly instead of two `cdk deploy`/`cdk destroy` calls racing the same
-# stack.
+# One run per PR at a time — but `cancel-in-progress: false`, not true.
+# A `cancel-in-progress: true` group here would let closing a PR cancel an
+# already-running deploy-preview job (its CFN operation keeps applying in
+# the background even after the GitHub Actions job is cancelled), and the
+# destroy job that fires right after would then be destroying a stack
+# CloudFormation still considers CREATE_IN_PROGRESS/UPDATE_IN_PROGRESS —
+# a real destroy failure that a "just in case" `|| true` used to paper
+# over (see the removed `|| true` below for why that's no longer there).
+# Queueing instead of cancelling means a fast second push waits for the
+# first deploy to finish rather than racing it, and a close-right-after-
+# push always waits for that deploy to actually complete before its
+# matching destroy runs. The cost is a PR that gets many rapid pushes
+# waits longer for its preview URL — acceptable for this project's scale.
 concurrency:
   group: pr-preview-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy-preview:
@@ -79,16 +88,7 @@ jobs:
       # code" property header comment (1) is about.
       - uses: actions/checkout@v4
 
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          cache-dependency-glob: infra/uv.lock
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: npm i -g aws-cdk
-
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: ./.github/actions/setup-cdk-deploy
         with:
           role-to-assume: ${{ vars.AWS_PREVIEW_ROLE_ARN }}
           aws-region: ${{ vars.AWS_DEPLOY_REGION || 'sa-east-1' }}
@@ -142,16 +142,7 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.base.sha }}
 
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          cache-dependency-glob: infra/uv.lock
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: npm i -g aws-cdk
-
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: ./.github/actions/setup-cdk-deploy
         with:
           role-to-assume: ${{ vars.AWS_PREVIEW_ROLE_ARN }}
           aws-region: ${{ vars.AWS_DEPLOY_REGION || 'sa-east-1' }}
@@ -160,16 +151,27 @@ jobs:
       # they must go first) — `cdk destroy` doesn't auto-resolve this the
       # way `deploy --all` resolves creation order.
       #
-      # `|| true`: if `deploy-preview` never actually ran for this PR (a
-      # fork PR that got gated out at the `if:` above, or a PR closed
-      # before its first push finished deploying), there's nothing to
-      # destroy — CloudFormation reports "stack does not exist" and `cdk
-      # destroy` exits non-zero. That's an expected, harmless case here,
-      # not a real failure worth failing this job over.
-      - run: >
-          uv run cdk destroy --force
-          "Backecast-pr-${{ github.event.pull_request.number }}-Pipeline"
-          "Backecast-pr-${{ github.event.pull_request.number }}-Api"
-          "Backecast-pr-${{ github.event.pull_request.number }}-Data"
-          -c stage=pr-${{ github.event.pull_request.number }}
-          || true
+      # Only destroy stacks CloudFormation actually reports as existing.
+      # This used to be a blanket `cdk destroy ... || true`, which was
+      # meant to cover "deploy-preview never ran for this PR, nothing to
+      # destroy" — but it silently swallowed *every* destroy failure, not
+      # just that one, including CloudFormation refusing to destroy a
+      # stack still mid CREATE_IN_PROGRESS/UPDATE_IN_PROGRESS (which the
+      # concurrency fix above makes far less likely, but not provably
+      # impossible — e.g. a manual re-run). A real destroy failure now
+      # fails this job loudly instead of leaving a `Backecast-pr-*` stack
+      # (S3 bucket, DynamoDB table, Lambda, SQS) silently running forever.
+      - run: |
+          STACKS=()
+          for name in Pipeline Api Data; do
+            stack="Backecast-pr-${{ github.event.pull_request.number }}-$name"
+            if aws cloudformation describe-stacks --stack-name "$stack" >/dev/null 2>&1; then
+              STACKS+=("$stack")
+            fi
+          done
+          if [ ${#STACKS[@]} -eq 0 ]; then
+            echo "No preview stacks exist for this PR — nothing to destroy."
+            exit 0
+          fi
+          uv run cdk destroy --force "${STACKS[@]}" \
+            -c stage=pr-${{ github.event.pull_request.number }}
