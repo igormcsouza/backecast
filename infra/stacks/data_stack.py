@@ -11,15 +11,27 @@ class DataStack(Stack):
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        dev_policy = RemovalPolicy.DESTROY if stage == "dev" else RemovalPolicy.RETAIN
-        is_dev = stage == "dev"
+        # `dev` and PR preview stages (`pr-<number>`, Phase 9) are both
+        # throwaway: dev gets wiped and redeployed on every merge to `main`,
+        # and a preview stack is `cdk destroy`'d the moment its PR closes
+        # (see .github/workflows/deploy-preview.yml). Both need
+        # `RemovalPolicy.DESTROY` + `auto_delete_objects=True` so teardown
+        # actually succeeds unattended — RETAIN (the default for anything
+        # else, i.e. `prod`) would leave an orphaned bucket/table behind on
+        # every `cdk destroy` and, worse, a non-empty S3 bucket makes
+        # CloudFormation delete fail outright, hanging the preview teardown
+        # job. `prod` deliberately keeps RETAIN: losing production data
+        # because someone fat-fingered a stack deletion is a much worse
+        # outcome than a manual cleanup later.
+        is_ephemeral = stage == "dev" or stage.startswith("pr-")
+        removal_policy = RemovalPolicy.DESTROY if is_ephemeral else RemovalPolicy.RETAIN
 
         self.media_bucket = s3.Bucket(
             self,
             "MediaBucket",
             bucket_name=f"backecast-media-{stage}-{self.account}",
-            removal_policy=dev_policy,
-            auto_delete_objects=is_dev,
+            removal_policy=removal_policy,
+            auto_delete_objects=is_ephemeral,
             cors=[
                 s3.CorsRule(
                     allowed_methods=[
@@ -48,7 +60,7 @@ class DataStack(Stack):
             ),
             sort_key=dynamodb.Attribute(name="SK", type=dynamodb.AttributeType.STRING),
             billing_mode=dynamodb.BillingMode.PAY_PER_REQUEST,
-            removal_policy=dev_policy,
+            removal_policy=removal_policy,
         )
         self.table.add_global_secondary_index(
             index_name="GSI1",

@@ -1,6 +1,13 @@
 # Phase 8 — continuous deployment. Every push to `main` (i.e. every merge)
-# deploys the whole stack automatically, with zero long-lived AWS keys ever
-# stored in GitHub. Two ideas worth reading before touching this file:
+# deploys the whole `dev` stack automatically, with zero long-lived AWS
+# keys ever stored in GitHub. This file is deliberately the *only* trigger
+# shaped like that: Phase 9 added two siblings that reuse the same
+# OIDC/CDK machinery but on very different triggers — `deploy-prod.yml`
+# (a `v*` tag push or a confirmed manual dispatch, never an automatic
+# `push: main`) and `deploy-preview.yml` (per-PR ephemeral stacks, its own
+# more tightly-scoped IAM role). See those files' own header comments for
+# why dev alone gets the "every merge" treatment. Two ideas worth reading
+# before touching this file:
 #
 # 1. GitHub OIDC -> AWS IAM role (deploy-backend, below). The old way to
 #    let a CI job call AWS is an IAM user + access key pair pasted into
@@ -68,20 +75,11 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
-      - uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          cache-dependency-glob: infra/uv.lock
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-      - run: npm i -g aws-cdk
-
       # No AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY anywhere — role-to-
       # assume is the only AWS-facing input, and it isn't a secret either
       # (an IAM role ARN grants nothing on its own without a trust policy
       # match); it's a plain repo *variable*, not a repo *secret*.
-      - uses: aws-actions/configure-aws-credentials@v4
+      - uses: ./.github/actions/setup-cdk-deploy
         with:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ vars.AWS_DEPLOY_REGION || 'sa-east-1' }}

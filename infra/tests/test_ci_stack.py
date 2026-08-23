@@ -38,13 +38,17 @@ def test_oidc_provider_trusts_github_actions_issuer():
 
 def test_deploy_role_trust_policy_scoped_to_repo_and_branch():
     # This is the trust boundary the whole phase is about: only a workflow
-    # run whose GitHub-issued JWT carries this exact `sub` claim (this repo,
-    # the `main` branch) can assume the role — not any other repo, and not
-    # a pull_request run against this same repo.
+    # run whose GitHub-issued JWT carries one of these exact `sub` claims
+    # (this repo's `main` branch, for dev; or a `v*` tag on this repo, for
+    # prod — Phase 9's promotion pattern, see ci_stack.py's module
+    # docstring) can assume the role — not any other repo, not a feature
+    # branch, and not a pull_request run against this same repo (that gets
+    # its own, separate role — see the preview-role tests below).
     template = synth_template()
     template.has_resource_properties(
         "AWS::IAM::Role",
         {
+            "RoleName": "backecast-github-actions-deploy",
             "AssumeRolePolicyDocument": {
                 "Statement": Match.array_with(
                     [
@@ -57,14 +61,88 @@ def test_deploy_role_trust_policy_scoped_to_repo_and_branch():
                                         "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
                                     },
                                     "StringLike": {
-                                        "token.actions.githubusercontent.com:sub": "repo:igormcsouza/backecast:ref:refs/heads/main",
+                                        "token.actions.githubusercontent.com:sub": [
+                                            "repo:igormcsouza/backecast:ref:refs/heads/main",
+                                            "repo:igormcsouza/backecast:ref:refs/tags/v*",
+                                        ],
                                     },
                                 },
                             }
                         )
                     ]
                 )
-            }
+            },
+        },
+    )
+
+
+def test_preview_role_trust_policy_scoped_to_pull_request_event_only():
+    # The preview role's trust is deliberately *disjoint* from the main
+    # deploy role's: it accepts the `pull_request` event's `sub` claim and
+    # nothing ref-based, so a PR-triggered token can never satisfy the main
+    # role's trust condition (and vice versa) — see ci_stack.py's module
+    # docstring for why these are two roles, not one widened role.
+    template = synth_template()
+    template.has_resource_properties(
+        "AWS::IAM::Role",
+        {
+            "RoleName": "backecast-github-actions-preview",
+            "AssumeRolePolicyDocument": {
+                "Statement": Match.array_with(
+                    [
+                        Match.object_like(
+                            {
+                                "Action": "sts:AssumeRoleWithWebIdentity",
+                                "Effect": "Allow",
+                                "Condition": {
+                                    "StringEquals": {
+                                        "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+                                        "token.actions.githubusercontent.com:sub": "repo:igormcsouza/backecast:pull_request",
+                                    },
+                                },
+                            }
+                        )
+                    ]
+                )
+            },
+        },
+    )
+
+
+def test_preview_role_can_only_assume_this_accounts_cdk_bootstrap_roles():
+    # Same least-privilege shape as the main deploy role: exactly
+    # sts:AssumeRole, only onto this account's cdk bootstrap roles.
+    template = synth_template()
+    template.has_resource_properties(
+        "AWS::IAM::Policy",
+        {
+            "PolicyDocument": {
+                "Statement": Match.array_with(
+                    [
+                        Match.object_like(
+                            {
+                                "Action": "sts:AssumeRole",
+                                "Effect": "Allow",
+                                "Resource": {
+                                    "Fn::Join": [
+                                        "",
+                                        Match.array_with(
+                                            [
+                                                Match.string_like_regexp(
+                                                    r":iam::123456789012:role/cdk-hnb659fds-\*-role-123456789012-sa-east-1"
+                                                )
+                                            ]
+                                        ),
+                                    ]
+                                },
+                            }
+                        )
+                    ]
+                )
+            },
+            "Roles": Match.array_with(
+                [{"Ref": Match.string_like_regexp("GithubActionsPreviewDeployRole")}]
+            ),
         },
     )
 
@@ -112,8 +190,9 @@ def test_deploy_role_can_only_assume_this_accounts_cdk_bootstrap_roles():
 def test_deploy_role_is_not_granted_administrator_access():
     template = synth_template()
     template.resource_count_is(
-        "AWS::IAM::Role", 2
-    )  # deploy role + the CDK-internal custom resource's own role
+        "AWS::IAM::Role", 3
+    )  # deploy role + preview role (Phase 9) + the CDK-internal custom
+    # resource's own role
     policies = template.find_resources("AWS::IAM::Policy")
     for policy in policies.values():
         for statement in policy["Properties"]["PolicyDocument"]["Statement"]:

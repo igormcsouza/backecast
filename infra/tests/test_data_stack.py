@@ -44,6 +44,29 @@ def test_dev_buckets_are_destroyable():
     template.has_resource("AWS::S3::Bucket", {"DeletionPolicy": "Delete"})
 
 
+def test_pr_preview_buckets_and_tables_are_destroyable():
+    # Phase 9: a `pr-<number>` stage is torn down (`cdk destroy`) the
+    # moment its PR closes (deploy-preview.yml) — if this stayed on the
+    # RETAIN default, the bucket (non-empty, since it holds uploaded
+    # media) would fail to delete and hang that teardown job every time.
+    app = cdk.App()
+    stack = DataStack(app, "TestPreviewStack", stage="pr-999")
+    template = Template.from_stack(stack)
+    template.has_resource("AWS::S3::Bucket", {"DeletionPolicy": "Delete"})
+    template.has_resource("AWS::DynamoDB::Table", {"DeletionPolicy": "Delete"})
+
+
+def test_prod_buckets_and_tables_are_retained():
+    # The flip side: `prod` never gets a `pr-*`/`dev` free pass — a
+    # `cdk destroy` (accidental or deliberate) against prod should leave
+    # the bucket/table behind rather than silently deleting real data.
+    app = cdk.App()
+    stack = DataStack(app, "TestProdStack", stage="prod")
+    template = Template.from_stack(stack)
+    template.has_resource("AWS::S3::Bucket", {"DeletionPolicy": "Retain"})
+    template.has_resource("AWS::DynamoDB::Table", {"DeletionPolicy": "Retain"})
+
+
 def test_media_bucket_cors_allows_post():
     template = synth_template()
     template.has_resource_properties(
