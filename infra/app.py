@@ -2,6 +2,7 @@
 import aws_cdk as cdk
 
 from stacks.api_stack import ApiStack
+from stacks.ci_stack import CiStack
 from stacks.data_stack import DataStack
 from stacks.pipeline_stack import PipelineStack
 
@@ -29,6 +30,19 @@ PipelineStack(
     bucket=data_stack.media_bucket,
     openai_api_key_param=data_stack.openai_api_key_param,
     llm_api_key_param=data_stack.llm_api_key_param,
+    env=env,
+)
+
+# Account-wide, not per-stage (see ci_stack.py's docstring) — instantiated
+# once regardless of which `stage` context this synth ran with. Not part
+# of deploy.yml's automated `cdk deploy` (Phase 8): a workflow can't grant
+# itself the AWS trust it's about to be scoped by, so this one stack is a
+# one-time manual bootstrap for Igor. See SESSIONS.md for the exact steps.
+CiStack(
+    app,
+    "Backecast-Ci",
+    github_repo="igormcsouza/backecast",
+    github_branch="main",
     env=env,
 )
 
