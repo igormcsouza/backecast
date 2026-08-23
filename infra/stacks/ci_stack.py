@@ -173,7 +173,7 @@ class CiStack(Stack):
             description=(
                 "Assumed by GitHub Actions (OIDC) to run `cdk deploy` for "
                 f"{github_repo}@{github_branch}. No long-lived AWS keys "
-                "involved — see ci_stack.py's module docstring."
+                "involved - see ci_stack.py's module docstring."
             ),
             assumed_by=iam.FederatedPrincipal(
                 github_oidc_provider.open_id_connect_provider_arn,
@@ -240,7 +240,7 @@ class CiStack(Stack):
             value=github_actions_deploy_role.role_arn,
             description=(
                 "Paste this into the repo's GitHub Actions variables as "
-                "AWS_DEPLOY_ROLE_ARN — see SESSIONS.md for the full "
+                "AWS_DEPLOY_ROLE_ARN - see SESSIONS.md for the full "
                 "bootstrap sequence."
             ),
         )
@@ -261,7 +261,7 @@ class CiStack(Stack):
             description=(
                 "Assumed by GitHub Actions (OIDC) to deploy/destroy "
                 f"ephemeral `Backecast-pr-<number>-*` stacks for {github_repo} "
-                "pull requests. Separate from the main deploy role — see "
+                "pull requests. Separate from the main deploy role - see "
                 "ci_stack.py's module docstring."
             ),
             assumed_by=iam.FederatedPrincipal(
@@ -313,7 +313,7 @@ class CiStack(Stack):
             value=github_actions_preview_role.role_arn,
             description=(
                 "Paste this into the repo's GitHub Actions variables as "
-                "AWS_PREVIEW_ROLE_ARN — used by deploy-preview.yml for "
+                "AWS_PREVIEW_ROLE_ARN - used by deploy-preview.yml for "
                 "ephemeral PR preview stacks. See SESSIONS.md."
             ),
         )
