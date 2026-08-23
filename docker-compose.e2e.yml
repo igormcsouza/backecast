@@ -1,0 +1,52 @@
+# Override for Phase 7's E2E suite: adds a `frontend` service (the static
+# export, served over HTTP) and an `e2e` service (Playwright, headless
+# Chromium) on the same network docker-compose.yml's `localstack`/`api`/
+# `worker` already share.
+#
+# Why a separate override file, not more services merged into
+# docker-compose.yml directly: the base file is normal local *development*
+# (`docker compose up -d` — API + worker you iterate against with
+# `--reload`), while this one is a *test run* — a frontend built once from
+# whatever's on disk right now, and a one-shot test container that exits
+# when the suite finishes. Keeping them apart means `docker compose up -d`
+# still boots the lightweight dev stack Igor's used through every earlier
+# phase, unchanged, and the E2E stack is opt-in:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.e2e.yml \
+#     up -d --build localstack init api worker frontend
+#   docker compose -f docker-compose.yml -f docker-compose.e2e.yml \
+#     run --rm e2e
+#
+# Why `frontend`/`api`/`localstack` as bare hostnames, not `localhost:*`:
+# every one of those is compose-network DNS, exactly what a real browser
+# would resolve if it were sitting on this network — see e2e/conftest.py's
+# module docstring for the presigned-URL reason this has to be true.
+services:
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Container-network hostname, not the host-mapped 8989 — the
+        # browser making these requests runs *inside* this compose network
+        # (the `e2e` service below), not on the host.
+        NEXT_PUBLIC_API_URL: http://api:8000
+    ports:
+      - "3300:3000" # optional: lets a host browser sanity-check the build too
+    depends_on:
+      api:
+        condition: service_started
+
+  e2e:
+    build:
+      context: ./e2e
+    environment:
+      - FRONTEND_URL=http://frontend:3000
+      - API_URL=http://api:8000
+      - ADMIN_KEY=local-dev-admin-key
+    depends_on:
+      frontend:
+        condition: service_started
+      api:
+        condition: service_started
+      worker:
+        condition: service_started

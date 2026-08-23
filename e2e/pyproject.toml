@@ -1,0 +1,27 @@
+[project]
+name = "e2e"
+version = "0.1.0"
+description = "Browser-level E2E tests (Playwright) for the Phase 6 admin+public flow"
+requires-python = ">=3.12"
+dependencies = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+    "pytest-playwright>=0.9.0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.16.4",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Stated explicitly (chromium happens to be pytest-playwright's own default
+# today) so `uv run pytest` can never silently start launching/downloading
+# firefox or webkit if that default ever changes upstream — see
+# conftest.py's docstring for why headless Chromium alone is enough for
+# this MVP's suite.
+addopts = "--browser chromium"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "C901"]
