@@ -1,9 +1,15 @@
 "use client";
 
+import { ChevronLeft } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
-import { ApiError, getPublicEpisode } from "@/lib/api";
+import CoverArt from "@/components/CoverArt";
+import EpisodePlayer from "@/components/EpisodePlayer";
+import PublicHeader from "@/components/PublicHeader";
+import ResourceList from "@/components/ResourceList";
+import { ApiError, getPublicEpisode, listPublicEpisodes } from "@/lib/api";
+import { formatDuration, formatLongDate } from "@/lib/format";
 import type { Episode } from "@/lib/types";
 
 // `useSearchParams()` requires a <Suspense> boundary even in a fully
@@ -16,7 +22,7 @@ import type { Episode } from "@/lib/types";
 // the id travels as `?id=...` instead of a route segment).
 export default function EpisodePage() {
   return (
-    <Suspense fallback={<p className="text-sm text-zinc-500">Loading…</p>}>
+    <Suspense fallback={<p className="text-sm text-text-muted">Loading…</p>}>
       <EpisodeDetail />
     </Suspense>
   );
@@ -61,59 +67,102 @@ function EpisodeDetail() {
     };
   }, [id]);
 
-  if (loading) return <p className="text-sm text-zinc-500">Loading…</p>;
-
-  if (error || !episode) {
-    return (
-      <div className="flex flex-col gap-4">
-        <p className="text-sm text-red-600 dark:text-red-400">
-          {error ?? "Episode not found."}
-        </p>
-        <Link href="/" className="text-sm underline">
-          Back to episodes
+  return (
+    <>
+      <PublicHeader />
+      <div className="mx-auto max-w-3xl px-4 py-8 pb-28">
+        <Link
+          href="/"
+          className="inline-flex items-center gap-1 text-sm text-text-muted hover:text-text"
+        >
+          <ChevronLeft size={16} /> All episodes
         </Link>
+
+        {loading && <p className="mt-6 text-sm text-text-muted">Loading…</p>}
+
+        {!loading && (error || !episode) && (
+          <p className="mt-6 text-sm text-danger">{error ?? "Episode not found."}</p>
+        )}
+
+        {!loading && episode && <EpisodeBody episode={episode} />}
       </div>
-    );
-  }
+    </>
+  );
+}
+
+function EpisodeBody({ episode }: { episode: Episode }) {
+  return (
+    <article className="mt-6 flex flex-col gap-6">
+      <div className="flex flex-col gap-4 sm:flex-row">
+        <CoverArt seed={episode.id} className="aspect-square w-28 shrink-0" />
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight text-text sm:text-2xl">
+            {episode.title}
+          </h1>
+          <p className="mt-1 text-xs text-text-muted">
+            {formatDuration(episode.duration)} · Released {formatLongDate(episode.release_date)}
+          </p>
+          <p className="mt-3 whitespace-pre-line text-sm text-text-muted">
+            {episode.description}
+          </p>
+        </div>
+      </div>
+
+      <EpisodePlayer episode={episode} />
+
+      <ResourceList resources={episode.resources} />
+
+      <MoreEpisodes excludeId={episode.id} />
+    </article>
+  );
+}
+
+function MoreEpisodes({ excludeId }: { excludeId: string }) {
+  const [episodes, setEpisodes] = useState<Episode[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    listPublicEpisodes(6)
+      .then((page) => {
+        if (!cancelled) setEpisodes(page.items.filter((e) => e.id !== excludeId).slice(0, 3));
+      })
+      .catch(() => {
+        // The main episode already loaded fine — a failed "more episodes"
+        // fetch just means an empty section, not a page-level error.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [excludeId]);
+
+  if (episodes.length === 0) return null;
 
   return (
-    <article className="flex flex-col gap-6">
-      <Link href="/" className="text-sm text-zinc-500 hover:underline">
-        &larr; All episodes
-      </Link>
-
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">{episode.title}</h1>
-        <p className="mt-2 whitespace-pre-line text-sm text-zinc-600 dark:text-zinc-400">
-          {episode.description}
-        </p>
-      </div>
-
-      {episode.audio_url && (
-        <audio controls src={episode.audio_url} className="w-full" />
-      )}
-
-      {episode.resources.length > 0 && (
-        <div>
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500">
-            Resources
-          </h2>
-          <ul className="mt-2 flex flex-col gap-1">
-            {episode.resources.map((resource) => (
-              <li key={resource.url}>
-                <a
-                  href={resource.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-sm text-blue-600 hover:underline dark:text-blue-400"
-                >
-                  {resource.label}
-                </a>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </article>
+    <div>
+      <h2 className="text-xs font-semibold uppercase tracking-wide text-text-muted">
+        More episodes
+      </h2>
+      <ul className="mt-2 flex flex-col divide-y divide-border rounded-xl border border-border">
+        {episodes.map((episode) => (
+          <li key={episode.id}>
+            <Link
+              href={`/episode?id=${encodeURIComponent(episode.id)}`}
+              className="flex items-center gap-3 px-3 py-2.5 transition hover:bg-surface-2"
+            >
+              <CoverArt seed={episode.id} className="h-10 w-10 shrink-0" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-sm font-medium text-text">
+                  {episode.title}
+                </span>
+                <span className="block text-xs text-text-muted">
+                  {formatDuration(episode.duration)}
+                </span>
+              </span>
+              <ChevronLeft size={16} className="rotate-180 shrink-0 text-text-muted" />
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }

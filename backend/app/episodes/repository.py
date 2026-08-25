@@ -101,6 +101,11 @@ class EpisodesRepository(RepositoryAbstract):
                 ":pk": "EPISODE",
                 ":status": EpisodeStatus.PUBLISHED.value,
             },
+            # GSI1SK is `{created_at}#{id}` — DynamoDB queries ascending by
+            # sort key by default, which is oldest-first; this flips it to
+            # match the "newest-created first" contract this method (and
+            # its docstring, and every caller) already assumes.
+            "ScanIndexForward": False,
             "Limit": limit,
         }
         if cursor:
