@@ -81,10 +81,13 @@ def test_worker_lambda_can_read_and_write_the_table():
     )
 
 
-def test_worker_lambda_can_read_uploads_and_write_transcripts():
+def test_worker_lambda_can_read_uploads_and_read_write_transcripts():
     # Scoped grants (objects_key_pattern), not a blanket grant_read_write on
     # the whole bucket — the worker only ever touches uploads/ (read) and
-    # transcripts/ (write).
+    # transcripts/ (read + write: `_advance_generating` reads back the
+    # transcript a later stage of the same episode's state machine wrote
+    # earlier — see pipeline_stack.py's comment on why this needs GetObject
+    # too, not just PutObject).
     template = synth_template()
     template.has_resource_properties(
         "AWS::IAM::Policy",
@@ -92,6 +95,13 @@ def test_worker_lambda_can_read_uploads_and_write_transcripts():
             "PolicyDocument": {
                 "Statement": Match.array_with(
                     [
+                        Match.object_like(
+                            {
+                                "Action": Match.array_with(["s3:GetObject*"]),
+                                "Effect": "Allow",
+                                "Resource": Match.any_value(),
+                            }
+                        ),
                         Match.object_like(
                             {
                                 "Action": Match.array_with(["s3:GetObject*"]),

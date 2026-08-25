@@ -139,12 +139,17 @@ class PipelineStack(Stack):
             memory_size=1024,
         )
         # Phase 5 needs real permissions the Phase 4 stub didn't: read the
-        # raw upload (to ffmpeg-preprocess it) and write the transcript,
-        # both scoped to their own key prefixes rather than a blanket
-        # grant_read_write on the whole bucket — the worker never needs to
-        # touch anything outside uploads/ or transcripts/.
+        # raw upload (to ffmpeg-preprocess it), and both write *and read
+        # back* the transcript — `_advance_generating` reads the transcript
+        # it just wrote in a later stage of the same state machine (a
+        # redelivered message can resume at `generating` without redoing
+        # transcription) — both scoped to their own key prefixes rather
+        # than a blanket grant_read_write on the whole bucket, since the
+        # worker never needs to touch anything outside uploads/ or
+        # transcripts/.
         table.grant_read_write_data(worker_function)
         bucket.grant_read(worker_function, objects_key_pattern="uploads/*")
+        bucket.grant_read(worker_function, objects_key_pattern="transcripts/*")
         bucket.grant_put(worker_function, objects_key_pattern="transcripts/*")
         openai_api_key_param.grant_read(worker_function)
         llm_api_key_param.grant_read(worker_function)
