@@ -27,30 +27,42 @@
 # 3. Path-based gating (the `changes` job below): a push that only touches
 #    `frontend/` shouldn't trigger a backend CDK deploy, a push that only
 #    touches `backend/`/`infra/` shouldn't trigger a frontend rebuild+
-#    publish, and a docs-only push (README.md, manual.md, SESSIONS.md,
-#    CLAUDE.md) should deploy nothing at all. `dorny/paths-filter` diffs
-#    the single commit CI just validated (`base: HEAD^`, from a 2-commit-
-#    deep checkout) against its parent — cheap and accurate for this
-#    repo's one-commit-per-merge history on `main`.
+#    publish, and a docs-only push (README.md, CLAUDE.md) should deploy
+#    nothing at all. `dorny/paths-filter` diffs the single commit CI just
+#    validated (`base: HEAD^`, from a 2-commit-deep checkout) against its
+#    parent — cheap and accurate for this repo's one-commit-per-merge
+#    history on `main`. The known gap: if CD didn't run (or skipped) on an
+#    earlier commit that *did* touch a layer, and the next commit that
+#    triggers CD doesn't touch that same layer, the diff won't "remember"
+#    the earlier undeployed change — this only ever looks one commit back,
+#    not since the last successful deploy. `workflow_dispatch` (below)
+#    exists as the manual recovery for exactly that case: it skips the
+#    `changes` gate entirely and deploys both layers unconditionally.
 name: CD
 
-# Runs after CI finishes on `main`, not on every push directly — a plain
-# `push: branches: [main]` trigger on *this* workflow would let cdk deploy
-# start racing CI's own test run, deploying code CI hasn't finished
-# checking yet. `workflow_run` instead watches the CI workflow (ci.yml)
-# and only fires once it *completes* on `main`; the `if` gate below then
-# checks it completed with conclusion "success" (CI's own path-filtered
-# jobs skipping is fine — GitHub reports a workflow's overall conclusion as
-# "success" as long as nothing in it actually failed).
+# Runs after CI finishes on `main` (the normal path), not on every push
+# directly — a plain `push: branches: [main]` trigger on *this* workflow
+# would let cdk deploy start racing CI's own test run, deploying code CI
+# hasn't finished checking yet. `workflow_run` instead watches the CI
+# workflow (ci.yml) and only fires once it *completes* on `main`; the `if`
+# gate below then checks it completed with conclusion "success" (CI's own
+# path-filtered jobs skipping is fine — GitHub reports a workflow's overall
+# conclusion as "success" as long as nothing in it actually failed).
+#
+# `workflow_dispatch` is the manual escape hatch — see header comment (3)
+# — for re-running a deploy that a path-filter gap left undone, without a
+# throwaway commit. Unlike the `workflow_run` path, it deploys both layers
+# unconditionally (no `changes` gate at all).
 on:
   workflow_run:
     workflows: ["CI"]
     types: [completed]
     branches: [main]
+  workflow_dispatch: {}
 
 jobs:
   changes:
-    if: github.event.workflow_run.conclusion == 'success'
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     outputs:
       backend: ${{ steps.filter.outputs.backend }}
@@ -75,7 +87,13 @@ jobs:
 
   deploy-backend:
     needs: changes
-    if: needs.changes.outputs.backend == 'true'
+    # always() so a workflow_dispatch run (where `changes` is skipped
+    # entirely, see its `if:` above) still deploys — `needs.changes.result
+    # == 'skipped'` covers that; the workflow_run path still gates on the
+    # actual path-filter output.
+    if: |
+      always() &&
+      (github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -83,12 +101,12 @@ jobs:
       run:
         working-directory: infra
     steps:
-      # Deploy the exact commit CI just passed, not whatever `main` has
-      # moved to since (there's no race in practice for a single-writer
-      # repo, but this is the correct/idiomatic pin regardless).
+      # Deploy the exact commit CI just passed (workflow_run), or whatever
+      # `main` currently is (workflow_dispatch — there's no
+      # `workflow_run` context to pin to).
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - uses: ./.github/actions/setup-cdk-deploy
         with:
@@ -117,7 +135,7 @@ jobs:
     needs: [changes, deploy-backend]
     if: |
       always() &&
-      needs.changes.outputs.frontend == 'true' &&
+      (github.event_name == 'workflow_dispatch' || needs.changes.outputs.frontend == 'true') &&
       (needs.deploy-backend.result == 'success' || needs.deploy-backend.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
@@ -130,7 +148,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
