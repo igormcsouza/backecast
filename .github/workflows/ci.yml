@@ -91,13 +91,54 @@ jobs:
       - run: npm ci
       - run: npm run build
 
+  # Its own compose lifecycle, separate from the e2e job below — booting
+  # once, running both suites against the *same* running stack looked
+  # convenient, but every integration test seeds/publishes episodes
+  # straight into the shared LocalStack DynamoDB table (see
+  # tests/integration/test_episodes_admin_review_flow.py's `_seed_episode`),
+  # which then shows up as pre-existing data in the e2e suite's own
+  # newest-first public-listing assertions — a real, reproducible failure,
+  # not a flake. Each job gets its own fresh runner VM, so two separate
+  # `docker compose up` lifecycles (this job's, and e2e's below) never share
+  # state.
+  integration:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Boot the compose stack (LocalStack, api, worker — no frontend)
+        run: docker compose up -d --build localstack init api worker
+
+      - name: Wait for the API to answer on its host port
+        run: timeout 60 bash -c 'until curl -sf http://localhost:8989/api/v1/health >/dev/null; do sleep 2; done'
+
+      # Runs inside the `api` container, on the compose network — the only
+      # place these tests are runnable at all (real LocalStack hostnames,
+      # ffmpeg, AUTH_STUB=1 for the admin-auth checks). See CLAUDE.md's
+      # testing-strategy section.
+      - name: Run backend integration tests
+        run: docker compose run --rm api uv run pytest tests/integration
+
+      - name: Compose logs (on failure)
+        if: failure()
+        run: docker compose logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
+
   # Phase 7: browser-level safety net. Boots the *whole* stack (LocalStack +
   # api + worker + a static-served frontend build) via docker compose, then
   # runs the Playwright suite against it — as a container on the same
   # compose network, for the same reason e2e/conftest.py explains: presigned
   # S3 URLs the backend hands back only resolve inside that network's
   # internal DNS, so both the frontend under test and the browser driving it
-  # have to live on it, not on the runner's bare host.
+  # have to live on it, not on the runner's bare host. Deliberately its own
+  # `docker compose up` (not reused from the `integration` job above) — see
+  # that job's comment for why sharing one running stack between the two
+  # suites pollutes e2e's assertions.
   e2e:
     needs: changes
     if: needs.changes.outputs.e2e == 'true'
@@ -114,15 +155,6 @@ jobs:
         run: |
           timeout 60 bash -c 'until curl -sf http://localhost:8989/api/v1/health >/dev/null; do sleep 2; done'
           timeout 60 bash -c 'until curl -sf http://localhost:3300/ >/dev/null; do sleep 2; done'
-
-      # Runs inside the `api` container, on the compose network — the only
-      # place these tests are runnable at all (real LocalStack hostnames,
-      # ffmpeg, AUTH_STUB=1 for the admin-auth checks). See CLAUDE.md's
-      # testing-strategy section.
-      - name: Run backend integration tests
-        run: |
-          docker compose -f docker-compose.yml -f docker-compose.e2e.yml \
-            run --rm api uv run pytest tests/integration
 
       - name: Run the E2E suite
         run: |
