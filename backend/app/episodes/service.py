@@ -116,6 +116,7 @@ class EpisodesService:
             ]
 
         if not fields:
+            item = await self._with_audio_url(item)
             return GetEpisodeSchema.model_validate(item)
 
         # `expected_status` closes the check-then-act race between the read
@@ -124,6 +125,7 @@ class EpisodesService:
         updated = await self._repository.update(
             episode_id, fields, expected_status=EpisodeStatus.REVIEW.value
         )
+        updated = await self._with_audio_url(updated)
         return GetEpisodeSchema.model_validate(updated)
 
     async def publish_episode(self, episode_id: str) -> GetEpisodeSchema:
@@ -135,6 +137,7 @@ class EpisodesService:
         if item is None:
             raise EpisodeNotFoundError()
         updated = await self._repository.publish(episode_id)
+        updated = await self._with_audio_url(updated)
         return GetEpisodeSchema.model_validate(updated)
 
     async def create_episode(

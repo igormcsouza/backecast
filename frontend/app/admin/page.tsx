@@ -1,7 +1,10 @@
 "use client";
 
+import { Clock, FileAudio, Mic, Upload } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import AdminHeader from "@/components/AdminHeader";
+import StatTile from "@/components/StatTile";
 import {
   ApiError,
   createEpisode,
@@ -9,7 +12,9 @@ import {
   listAdminEpisodes,
   uploadToPresignedPost,
 } from "@/lib/api";
+import { computeAdminStats } from "@/lib/adminStats";
 import { clearStoredToken, getStoredToken, setStoredToken, login } from "@/lib/auth";
+import { formatDurationHours, formatRelativeTime } from "@/lib/format";
 import type { Episode, EpisodeStatus } from "@/lib/types";
 
 const ALLOWED_CONTENT_TYPES: Record<string, string> = {
@@ -40,20 +45,27 @@ export default function AdminPage() {
   const [token, setToken] = useState<string | null>(null);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  // Lazy initializer (runs once, at first render, not inside the effect
-  // below) — true only when there's a stored token that still needs
-  // validating, so the effect never has to flip it synchronously for the
-  // "nothing stored" case (see react-hooks/set-state-in-effect).
-  const [checkingToken, setCheckingToken] = useState(() => !!getStoredToken());
+  // Always true on first render, on both the server (build-time export
+  // has no `window`/localStorage at all, so it can't know either way) and
+  // the client (checking localStorage happens in the effect below, not
+  // during render — reading it in a lazy initializer instead made the
+  // client's first render disagree with the statically-exported HTML
+  // whenever a token was already stored, a real hydration mismatch, not
+  // just a style choice). Starting `true` everywhere also means the page
+  // never has to guess "sign in" vs "dashboard" before it actually knows —
+  // otherwise the first frame renders the sign-in form (the `!token`
+  // fallback) even for an already-logged-in visitor, a visible flash.
+  const [checkingToken, setCheckingToken] = useState(true);
   const [loginError, setLoginError] = useState<string | null>(null);
 
-  // On mount, validate a previously-issued token from localStorage against
-  // the admin list route (cheap, side-effect-free) so an expired/revoked
-  // token doesn't silently look "logged in" until the first real action
-  // fails.
   useEffect(() => {
     const stored = getStoredToken();
-    if (!stored) return;
+    if (!stored) {
+      // Deferred a tick rather than a synchronous setState call here (see
+      // react-hooks/set-state-in-effect).
+      Promise.resolve().then(() => setCheckingToken(false));
+      return;
+    }
     listAdminEpisodes(stored)
       .then(() => setToken(stored))
       .catch(() => {
@@ -83,39 +95,59 @@ export default function AdminPage() {
   }
 
   if (checkingToken) {
-    return <p className="text-sm text-zinc-500">Checking admin session…</p>;
+    return <p className="p-8 text-sm text-text-muted">Checking admin session…</p>;
   }
 
   if (!token) {
     return (
-      <div className="mx-auto flex max-w-sm flex-col gap-4">
-        <h1 className="text-xl font-semibold">Admin sign in</h1>
-        <form onSubmit={handleLogin} className="flex flex-col gap-3">
-          <input
-            type="text"
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            placeholder="Username"
-            autoComplete="username"
-            className="rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
-            autoFocus
-          />
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            placeholder="Password"
-            autoComplete="current-password"
-            className="rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
-          />
-          <button
-            type="submit"
-            className="rounded-md bg-zinc-900 px-3 py-2 text-sm font-medium text-white hover:bg-zinc-700 dark:bg-zinc-100 dark:text-zinc-900"
-          >
-            Sign in
-          </button>
-        </form>
-        {loginError && <p className="text-sm text-red-600 dark:text-red-400">{loginError}</p>}
+      <div className="flex min-h-screen items-center justify-center px-4">
+        <div className="w-full max-w-sm rounded-2xl border border-border bg-surface p-6">
+          <div className="flex flex-col items-center gap-2 text-center">
+            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-accent-soft text-accent">
+              <Mic size={20} />
+            </span>
+            <h1 className="text-lg font-semibold text-text">Admin sign in</h1>
+            <p className="text-xs text-text-muted">
+              Upload, review, and publish Backecast episodes.
+            </p>
+          </div>
+
+          <form onSubmit={handleLogin} className="mt-5 flex flex-col gap-3">
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-text-muted">Username</span>
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                placeholder="Username"
+                autoComplete="username"
+                className="rounded-lg border border-border-strong bg-surface-2 px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
+                autoFocus
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-xs font-medium text-text-muted">Password</span>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Password"
+                autoComplete="current-password"
+                className="rounded-lg border border-border-strong bg-surface-2 px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
+              />
+            </label>
+            <button
+              type="submit"
+              className="mt-2 rounded-lg bg-accent px-3 py-2 text-sm font-medium text-bg transition hover:bg-accent-strong"
+            >
+              Sign in
+            </button>
+          </form>
+          {loginError && <p className="mt-3 text-sm text-danger">{loginError}</p>}
+          <p className="mt-4 text-center text-[11px] text-text-muted">
+            Single admin account — managed in Cognito.
+          </p>
+        </div>
       </div>
     );
   }
@@ -130,80 +162,176 @@ function AdminDashboard({
   token: string;
   onLogout: () => void;
 }) {
-  const [reviewQueue, setReviewQueue] = useState<Episode[]>([]);
+  const [allEpisodes, setAllEpisodes] = useState<Episode[]>([]);
   const [queueError, setQueueError] = useState<string | null>(null);
   const [activeUploadId, setActiveUploadId] = useState<string | null>(null);
+  const [tab, setTab] = useState<"review" | "published">("review");
 
-  const refreshQueue = () => {
-    listAdminEpisodes(token, "review")
+  const refreshEpisodes = () => {
+    listAdminEpisodes(token)
       .then((items) => {
-        setReviewQueue(items);
+        setAllEpisodes(items);
         setQueueError(null);
       })
-      .catch(() => setQueueError("Failed to load the review queue."));
+      .catch(() => setQueueError("Failed to load episodes."));
   };
 
-  useEffect(refreshQueue, [token]);
+  useEffect(refreshEpisodes, [token]);
+
+  const stats = useMemo(() => computeAdminStats(allEpisodes), [allEpisodes]);
+  const reviewQueue = allEpisodes.filter((e) => e.status === "review");
+  const published = allEpisodes.filter((e) => e.status === "published");
+  const inFlight = allEpisodes.filter((e) => IN_FLIGHT_STATUSES.includes(e.status));
+  const visible = tab === "review" ? [...inFlight, ...reviewQueue] : published;
 
   return (
-    <div className="flex flex-col gap-10">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">Admin</h1>
-        <button
-          type="button"
-          onClick={onLogout}
-          className="text-sm text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-50"
-        >
-          Sign out
-        </button>
-      </div>
+    <div className="min-h-screen">
+      <AdminHeader onSignOut={onLogout} />
+      <div className="mx-auto flex max-w-5xl flex-col gap-8 px-4 py-8">
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight text-text">Admin overview</h1>
+        </div>
 
-      <UploadForm token={token} onUploadStarted={setActiveUploadId} />
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <StatTile icon={Mic} label="Published episodes" value={stats.publishedCount} />
+          <StatTile
+            icon={Clock}
+            label="Hours of content"
+            value={formatDurationHours(stats.totalContentSeconds)}
+          />
+          <StatTile icon={FileAudio} label="Waiting on review" value={stats.reviewCount} />
+          <StatTile icon={Upload} label="Uploaded this month" value={stats.uploadedThisMonth} />
+        </div>
 
-      {activeUploadId && (
-        <UploadStatus
+        <UploadForm
           token={token}
-          episodeId={activeUploadId}
-          onDone={() => {
-            setActiveUploadId(null);
-            refreshQueue();
-          }}
+          onUploadStarted={setActiveUploadId}
+          onUploadFailed={refreshEpisodes}
         />
-      )}
 
-      <section className="flex flex-col gap-4">
-        <h2 className="text-lg font-semibold">Review queue</h2>
-        {queueError && <p className="text-sm text-red-600 dark:text-red-400">{queueError}</p>}
-        {reviewQueue.length === 0 && !queueError && (
-          <p className="text-sm text-zinc-500">Nothing waiting for review.</p>
+        {activeUploadId && (
+          <UploadStatus
+            token={token}
+            episodeId={activeUploadId}
+            onDone={() => {
+              setActiveUploadId(null);
+              refreshEpisodes();
+            }}
+          />
         )}
-        <ul className="flex flex-col gap-3">
-          {reviewQueue.map((episode) => (
-            <li
-              key={episode.id}
-              className="flex items-center justify-between rounded-lg border border-zinc-200 px-4 py-3 dark:border-zinc-800"
+
+        <section className="flex flex-col gap-3">
+          <div className="flex items-center gap-4 border-b border-border">
+            <button
+              type="button"
+              onClick={() => setTab("review")}
+              className={`border-b-2 px-1 pb-2 text-sm font-medium ${
+                tab === "review"
+                  ? "border-accent text-text"
+                  : "border-transparent text-text-muted hover:text-text"
+              }`}
             >
-              <span className="text-sm">{episode.title || "(untitled)"}</span>
-              <Link
-                href={`/admin/review?id=${encodeURIComponent(episode.id)}`}
-                className="text-sm font-medium text-blue-600 hover:underline dark:text-blue-400"
-              >
-                Review
-              </Link>
-            </li>
-          ))}
-        </ul>
-      </section>
+              Review queue · {reviewQueue.length + inFlight.length}
+            </button>
+            <button
+              type="button"
+              onClick={() => setTab("published")}
+              className={`border-b-2 px-1 pb-2 text-sm font-medium ${
+                tab === "published"
+                  ? "border-accent text-text"
+                  : "border-transparent text-text-muted hover:text-text"
+              }`}
+            >
+              Published · {published.length}
+            </button>
+          </div>
+
+          {queueError && <p className="text-sm text-danger">{queueError}</p>}
+          {visible.length === 0 && !queueError && (
+            <p className="text-sm text-text-muted">Nothing here yet.</p>
+          )}
+          <ul className="flex flex-col gap-2">
+            {visible.map((episode) => (
+              <EpisodeRow key={episode.id} episode={episode} />
+            ))}
+          </ul>
+        </section>
+      </div>
     </div>
+  );
+}
+
+const STATUS_LABELS: Record<EpisodeStatus, string> = {
+  uploading: "Uploading",
+  processing: "Preprocessing audio",
+  transcribing: "Transcribing",
+  generating: "Generating metadata",
+  review: "Ready for review",
+  published: "Published",
+  rejected: "Rejected (too long)",
+  failed: "Failed",
+};
+
+const STATUS_BADGE_CLASS: Record<EpisodeStatus, string> = {
+  uploading: "bg-surface-3 text-text-muted",
+  processing: "bg-surface-3 text-text-muted",
+  transcribing: "bg-surface-3 text-text-muted",
+  generating: "bg-surface-3 text-text-muted",
+  review: "bg-accent-soft text-gold",
+  published: "bg-accent-soft text-accent-strong",
+  rejected: "bg-surface-3 text-danger",
+  failed: "bg-surface-3 text-danger",
+};
+
+function EpisodeRow({ episode }: { episode: Episode }) {
+  const isReviewReady = episode.status === "review";
+  // In-flight episodes (uploading/processing/transcribing/generating) have
+  // nothing to open yet — the worker is still writing to that row. Every
+  // other status (review, published, rejected, failed) can at least be
+  // opened: review to review-and-publish, the rest to inspect, edit, or
+  // (once backecast#10 lands) delete.
+  const canOpen = !IN_FLIGHT_STATUSES.includes(episode.status);
+
+  return (
+    <li className="flex items-center gap-3 rounded-xl border border-border bg-surface px-4 py-3">
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium text-text">
+          {episode.title || "(untitled)"}
+        </p>
+        <p className="text-xs text-text-muted">
+          Uploaded {formatRelativeTime(episode.created_at)}
+        </p>
+      </div>
+      <span
+        className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-medium ${STATUS_BADGE_CLASS[episode.status]}`}
+      >
+        {STATUS_LABELS[episode.status]}
+        {IN_FLIGHT_STATUSES.includes(episode.status) && "…"}
+      </span>
+      {canOpen && (
+        <Link
+          href={`/admin/review?id=${encodeURIComponent(episode.id)}`}
+          className={
+            isReviewReady
+              ? "shrink-0 rounded-full bg-accent px-3 py-1.5 text-xs font-medium text-bg transition hover:bg-accent-strong"
+              : "shrink-0 rounded-full border border-border-strong px-3 py-1.5 text-xs font-medium text-text transition hover:border-accent"
+          }
+        >
+          {isReviewReady ? "Review" : "Manage"}
+        </Link>
+      )}
+    </li>
   );
 }
 
 function UploadForm({
   token,
   onUploadStarted,
+  onUploadFailed,
 }: {
   token: string;
   onUploadStarted: (episodeId: string) => void;
+  onUploadFailed: () => void;
 }) {
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -233,44 +361,50 @@ function UploadForm({
     } catch (err) {
       setProgress(null);
       setError(err instanceof ApiError ? err.message : "Upload failed.");
+      // A failed attempt can still have created an episode row server-side
+      // (e.g. the create succeeded but the S3 upload leg that follows it
+      // didn't, or a retried write raced its own conditional check) —
+      // refreshing here is what surfaces that instead of leaving it stuck
+      // and invisible while the dashboard still says "nothing here yet".
+      onUploadFailed();
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
   }
 
   return (
-    <section className="flex flex-col gap-3">
-      <h2 className="text-lg font-semibold">Upload an episode</h2>
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".mp3,.m4a,.mp4,audio/mpeg,audio/mp4,audio/x-m4a"
-        onChange={handleFileChange}
-        className="text-sm"
-      />
+    <section className="flex flex-col gap-2">
+      <h2 className="text-sm font-semibold text-text">Upload an episode</h2>
+      <label className="relative flex cursor-pointer flex-col items-center gap-2 rounded-2xl border border-dashed border-border-strong bg-surface px-4 py-8 text-center transition hover:border-accent">
+        <span className="flex h-9 w-9 items-center justify-center rounded-full bg-accent-soft text-accent">
+          <Upload size={16} />
+        </span>
+        <span className="text-sm text-text">
+          Drag an episode here, or <span className="text-accent underline">browse files</span>
+        </span>
+        <span className="text-xs text-text-muted">
+          MP3, M4A, or MP4 — title, description, and resources are generated automatically.
+        </span>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".mp3,.m4a,.mp4,audio/mpeg,audio/mp4,audio/x-m4a"
+          onChange={handleFileChange}
+          className="absolute inset-0 cursor-pointer opacity-0"
+        />
+      </label>
       {progress !== null && (
-        <div className="h-2 w-full overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-800">
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-3">
           <div
-            className="h-full rounded-full bg-zinc-900 transition-all dark:bg-zinc-100"
+            className="h-full rounded-full bg-accent transition-all"
             style={{ width: `${Math.round(progress * 100)}%` }}
           />
         </div>
       )}
-      {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {error && <p className="text-sm text-danger">{error}</p>}
     </section>
   );
 }
-
-const STATUS_LABELS: Record<EpisodeStatus, string> = {
-  uploading: "Uploading",
-  processing: "Preprocessing audio",
-  transcribing: "Transcribing",
-  generating: "Generating metadata",
-  review: "Ready for review",
-  published: "Published",
-  rejected: "Rejected (too long)",
-  failed: "Failed",
-};
 
 function UploadStatus({
   token,
@@ -320,16 +454,16 @@ function UploadStatus({
   }, [episodeId, token]);
 
   return (
-    <section className="rounded-lg border border-zinc-200 px-4 py-3 dark:border-zinc-800">
-      <p className="text-sm">
+    <section className="rounded-xl border border-border bg-surface px-4 py-3">
+      <p className="text-sm text-text">
         {STATUS_LABELS[status]}
         {IN_FLIGHT_STATUSES.includes(status) && "…"}
       </p>
-      {error && <p className="mt-1 text-sm text-red-600 dark:text-red-400">{error}</p>}
+      {error && <p className="mt-1 text-sm text-danger">{error}</p>}
       {status === "review" && (
         <Link
           href={`/admin/review?id=${encodeURIComponent(episodeId)}`}
-          className="mt-2 inline-block text-sm font-medium text-blue-600 hover:underline dark:text-blue-400"
+          className="mt-2 inline-block text-sm font-medium text-accent hover:underline"
         >
           Review now
         </Link>

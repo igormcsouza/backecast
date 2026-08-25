@@ -17,6 +17,17 @@ class Settings(BaseSettings):
     table_name: str = "backecast-dev"
     aws_region: str = "sa-east-1"
     aws_endpoint_url: str | None = None  # set thru env vars
+    # Only ever needed locally: `aws_endpoint_url` is the docker-compose
+    # network hostname (`http://localstack:4566`) the api/worker containers
+    # use to actually reach LocalStack — but a presigned URL bakes that same
+    # host into the URL itself, and a browser running on the *host* machine
+    # (not inside the compose network) can't resolve `localstack` at all.
+    # Presigning is pure local crypto/URL construction (no network call at
+    # signing time), so the presigning client can safely use a different,
+    # host-reachable endpoint without affecting any other AWS call. Falls
+    # back to `aws_endpoint_url` (real AWS in prod has no such split) unless
+    # docker-compose.yml overrides it for local dev.
+    aws_endpoint_url_public: str | None = None
     media_bucket_name: str = "backecast-media-dev"
 
     # --- Admin auth (Cognito) -----------------------------------------------

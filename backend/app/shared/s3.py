@@ -24,7 +24,11 @@ settings = get_settings()
 _s3_client = boto3.client(
     "s3",
     region_name=settings.aws_region,
-    endpoint_url=settings.aws_endpoint_url,
+    # This client only ever presigns URLs (see the module docstring) — never
+    # makes a live call to S3 itself — so it's safe for it to use a
+    # different, browser-reachable endpoint than the one api/worker use for
+    # their own direct AWS calls. See Settings.aws_endpoint_url_public.
+    endpoint_url=settings.aws_endpoint_url_public or settings.aws_endpoint_url,
     config=Config(s3={"addressing_style": "path"}),
 )
 

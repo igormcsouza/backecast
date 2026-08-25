@@ -1,26 +1,77 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --color-bg: #0b120e;
+  --color-surface: #101913;
+  --color-surface-2: #141f18;
+  --color-surface-3: #1b291f;
+  --color-border: #223228;
+  --color-border-strong: #33473a;
+  --color-text: #f2f5f0;
+  --color-text-muted: #8a9d8e;
+  --color-accent: #34d399;
+  --color-accent-strong: #6ee7ab;
+  --color-accent-soft: #14291d;
+  --color-gold: #d99a3d;
+  --color-danger: #e0605a;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --color-bg: var(--color-bg);
+  --color-surface: var(--color-surface);
+  --color-surface-2: var(--color-surface-2);
+  --color-surface-3: var(--color-surface-3);
+  --color-border: var(--color-border);
+  --color-border-strong: var(--color-border-strong);
+  --color-text: var(--color-text);
+  --color-text-muted: var(--color-text-muted);
+  --color-accent: var(--color-accent);
+  --color-accent-strong: var(--color-accent-strong);
+  --color-accent-soft: var(--color-accent-soft);
+  --color-gold: var(--color-gold);
+  --color-danger: var(--color-danger);
+  --font-sans: var(--font-plex-sans);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+/* The single, app-wide native <audio> element our custom transport
+   controls drive (see components/AudioProvider.tsx) — kept in the DOM as
+   a real, non-zero-size, non-`display:none` element (not visually hidden
+   from assistive tech via hard hiding) so it stays reachable while the
+   custom UI is what people actually see and interact with. */
+.native-audio {
+  /* Browsers default `audio:not([controls])` to `display: none` — this
+     element intentionally has no `controls` attribute (the custom
+     transport UI drives it instead), so that default has to be overridden
+     explicitly or the element renders nothing at all, not just invisibly.
+     The classic "visually hidden" clip technique (not `opacity:0` or
+     `visibility:hidden`) is deliberate too: those both count as "not
+     visible" to accessibility tooling and to Playwright's actionability
+     checks, which would make this element untestable and unreachable for
+     assistive tech even though it's the thing actually playing audio. */
+  display: block;
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: 999px;
 }
