@@ -59,8 +59,13 @@ export default function AdminPage() {
   useEffect(() => {
     const stored = getStoredToken();
     if (!stored) return;
-    setCheckingToken(true);
-    listAdminEpisodes(stored)
+    // `setCheckingToken(true)` deliberately isn't called synchronously
+    // here (see react-hooks/set-state-in-effect) — chaining it onto the
+    // same promise as the actual check keeps this a single async
+    // continuation instead of a synchronous render-triggering call.
+    Promise.resolve()
+      .then(() => setCheckingToken(true))
+      .then(() => listAdminEpisodes(stored))
       .then(() => setToken(stored))
       .catch(() => {
         clearStoredToken();

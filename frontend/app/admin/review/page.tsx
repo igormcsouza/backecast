@@ -1,6 +1,6 @@
 "use client";
 
-import { RefreshCw, X } from "lucide-react";
+import { ChevronLeft, FileText, RefreshCw, Trash2, X } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
@@ -24,13 +24,16 @@ export default function ReviewPage() {
 function ReviewEditor() {
   const searchParams = useSearchParams();
   const id = searchParams.get("id");
-  const token = getStoredToken();
 
+  // `undefined` = "haven't checked localStorage yet" (true on both the
+  // server, which has no `window` at all, and the client's first render,
+  // before effects run — the two agree, so there's nothing to hydrate
+  // mismatched). Reading localStorage directly during render instead (as
+  // this used to) made the client's first render disagree with the
+  // static export whenever a token was already stored, which is a real
+  // hydration mismatch, not just a style preference.
+  const [token, setToken] = useState<string | null | undefined>(undefined);
   const [episode, setEpisode] = useState<Episode | null>(null);
-  // Initial state already reflects the "can't fetch yet" cases (no admin
-  // key, no id) so the effect never needs to call setState synchronously
-  // in those branches (see react-hooks/set-state-in-effect).
-  const [loading, setLoading] = useState(!!(token && id));
   const [error, setError] = useState<string | null>(null);
 
   const [title, setTitle] = useState("");
@@ -43,6 +46,12 @@ function ReviewEditor() {
   const [publishError, setPublishError] = useState<string | null>(null);
 
   useEffect(() => {
+    // Deferred a tick (see react-hooks/set-state-in-effect) rather than
+    // calling setToken() synchronously here.
+    Promise.resolve().then(() => setToken(getStoredToken()));
+  }, []);
+
+  useEffect(() => {
     if (!token || !id) return;
     getAdminEpisode(id, token)
       .then((data) => {
@@ -51,9 +60,12 @@ function ReviewEditor() {
         setDescription(data.description);
         setResources(data.resources);
       })
-      .catch(() => setError("Failed to load episode."))
-      .finally(() => setLoading(false));
+      .catch(() => setError("Failed to load episode."));
   }, [id, token]);
+
+  if (token === undefined) {
+    return <p className="p-8 text-sm text-text-muted">Checking admin session…</p>;
+  }
 
   if (!token) {
     return (
@@ -67,10 +79,8 @@ function ReviewEditor() {
   }
 
   if (!id) return <p className="p-8 text-sm text-danger">No episode id given.</p>;
-  if (loading) return <p className="p-8 text-sm text-text-muted">Loading…</p>;
-  if (error || !episode) {
-    return <p className="p-8 text-sm text-danger">{error ?? "Not found."}</p>;
-  }
+  if (error) return <p className="p-8 text-sm text-danger">{error}</p>;
+  if (!episode) return <p className="p-8 text-sm text-text-muted">Loading…</p>;
 
   function updateResource(index: number, field: keyof Resource, value: string) {
     setResources((prev) =>
@@ -127,8 +137,11 @@ function ReviewEditor() {
     <div className="min-h-screen">
       <AdminHeader />
       <div className="mx-auto flex max-w-2xl flex-col gap-6 px-4 py-8">
-        <Link href="/admin" className="text-sm text-text-muted hover:underline">
-          &larr; Admin
+        <Link
+          href="/admin"
+          className="inline-flex items-center gap-1 text-sm text-text-muted hover:text-text hover:underline"
+        >
+          <ChevronLeft size={16} /> Admin
         </Link>
 
         <div className="flex items-center justify-between">
@@ -171,8 +184,7 @@ function ReviewEditor() {
           <input
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            disabled={!isReview}
-            className="rounded-lg border border-border-strong bg-surface-2 px-3 py-2 text-sm text-text disabled:opacity-60"
+            className="rounded-lg border border-border-strong bg-surface-2 px-3 py-2 text-sm text-text"
           />
         </label>
 
@@ -181,9 +193,8 @@ function ReviewEditor() {
           <textarea
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            disabled={!isReview}
             rows={4}
-            className="rounded-lg border border-border-strong bg-surface-2 px-3 py-2 text-sm text-text disabled:opacity-60"
+            className="rounded-lg border border-border-strong bg-surface-2 px-3 py-2 text-sm text-text"
           />
         </label>
 
@@ -195,51 +206,52 @@ function ReviewEditor() {
                 value={resource.label}
                 onChange={(e) => updateResource(index, "label", e.target.value)}
                 placeholder="Label"
-                disabled={!isReview}
-                className="w-1/3 rounded-lg border border-border-strong bg-surface-2 px-3 py-2 text-sm text-text disabled:opacity-60"
+                className="w-1/3 rounded-lg border border-border-strong bg-surface-2 px-3 py-2 text-sm text-text"
               />
               <input
                 value={resource.url}
                 onChange={(e) => updateResource(index, "url", e.target.value)}
                 placeholder="https://..."
-                disabled={!isReview}
-                className="flex-1 rounded-lg border border-border-strong bg-surface-2 px-3 py-2 text-sm text-text disabled:opacity-60"
+                className="flex-1 rounded-lg border border-border-strong bg-surface-2 px-3 py-2 text-sm text-text"
               />
-              {isReview && (
-                <button
-                  type="button"
-                  onClick={() => removeResource(index)}
-                  aria-label={`Remove resource ${resource.label || index + 1}`}
-                  className="text-text-muted transition hover:text-danger"
-                >
-                  <X size={16} />
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={() => removeResource(index)}
+                aria-label={`Remove resource ${resource.label || index + 1}`}
+                className="text-text-muted transition hover:text-danger"
+              >
+                <X size={16} />
+              </button>
             </div>
           ))}
-          {isReview && (
-            <button
-              type="button"
-              onClick={addResource}
-              className="self-start text-sm text-accent hover:underline"
-            >
-              + Add resource
-            </button>
-          )}
+          <button
+            type="button"
+            onClick={addResource}
+            className="self-start text-sm text-accent hover:underline"
+          >
+            + Add resource
+          </button>
         </div>
+
+        <TranscriptSection />
 
         <EpisodePlayer episode={episode} />
 
-        {isReview && (
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={saving}
-              className="rounded-lg border border-border-strong px-4 py-2 text-sm font-medium text-text transition hover:border-accent disabled:opacity-50"
-            >
-              {saving ? "Saving…" : "Save changes"}
-            </button>
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={saving || !isReview}
+            title={
+              isReview
+                ? undefined
+                : "Editing a published (or still-processing) episode isn't supported by the API yet — see backecast#10"
+            }
+            className="rounded-lg border border-border-strong px-4 py-2 text-sm font-medium text-text transition hover:border-accent disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {saving ? "Saving…" : "Save changes"}
+          </button>
+          {isReview && (
             <button
               type="button"
               onClick={handlePublish}
@@ -248,10 +260,40 @@ function ReviewEditor() {
             >
               {publishing ? "Publishing…" : "Publish"}
             </button>
-            {saveMessage && <span className="text-sm text-text-muted">{saveMessage}</span>}
-          </div>
-        )}
+          )}
+          <button
+            type="button"
+            disabled
+            title="Deleting an episode isn't wired up on the backend yet (the DELETE route is a stub) — see backecast#11"
+            className="ml-auto flex cursor-not-allowed items-center gap-1.5 rounded-lg border border-danger/40 px-4 py-2 text-sm font-medium text-danger opacity-50"
+          >
+            <Trash2 size={14} /> Delete episode
+          </button>
+          {saveMessage && <span className="text-sm text-text-muted">{saveMessage}</span>}
+        </div>
         {publishError && <p className="text-sm text-danger">{publishError}</p>}
+      </div>
+    </div>
+  );
+}
+
+function TranscriptSection() {
+  return (
+    <div className="flex flex-col gap-2">
+      <span className="text-sm font-medium text-text">Transcript</span>
+      <div className="flex items-center justify-between rounded-lg border border-dashed border-border-strong bg-surface-2 px-3 py-2.5">
+        <span className="flex items-center gap-1.5 text-sm text-text-muted">
+          <FileText size={14} /> The worker writes a full transcript to S3, but no API route
+          exposes it yet.
+        </span>
+        <button
+          type="button"
+          disabled
+          title="Needs GET /episodes/{id}/transcript on the backend — see backecast#12"
+          className="shrink-0 cursor-not-allowed rounded-md border border-border-strong px-2.5 py-1 text-xs font-medium text-text-muted opacity-60"
+        >
+          View transcript
+        </button>
       </div>
     </div>
   );

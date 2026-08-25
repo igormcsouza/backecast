@@ -135,6 +135,11 @@ infra/
 
 ```bash
 docker compose up -d            # local stack (LocalStack + api + worker)
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+                                 # same, plus makes presigned S3 URLs reachable
+                                 # from a browser on the host (needed to test
+                                 # real uploads/playback outside the container
+                                 # network — see docker-compose.local.yml)
 uv run pytest                   # in backend/ (unit only, bare) or infra/
 docker compose run --rm api uv run pytest tests/integration  # backend integration
 uv run ruff check --fix .       # lint (backend + infra)
