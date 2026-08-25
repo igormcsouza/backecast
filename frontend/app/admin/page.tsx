@@ -45,16 +45,21 @@ export default function AdminPage() {
   const [token, setToken] = useState<string | null>(null);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  // Lazy initializer (runs once, at first render, not inside the effect
-  // below) — true only when there's a stored token that still needs
-  // validating, so the effect never has to flip it synchronously for the
-  // "nothing stored" case (see react-hooks/set-state-in-effect).
-  const [checkingToken, setCheckingToken] = useState(() => !!getStoredToken());
+  // Always false on first render, on both the server (build-time export
+  // has no `window`/localStorage at all) and the client — reading
+  // localStorage in a lazy initializer instead made the client's first
+  // render disagree with the statically-exported HTML whenever a token
+  // was already stored, which is exactly a React hydration mismatch, not
+  // just a cosmetic one. Flipping it inside the effect below keeps both
+  // renders identical; the effect then synchronously corrects it before
+  // the "checking session" state would otherwise flash for no reason.
+  const [checkingToken, setCheckingToken] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
 
   useEffect(() => {
     const stored = getStoredToken();
     if (!stored) return;
+    setCheckingToken(true);
     listAdminEpisodes(stored)
       .then(() => setToken(stored))
       .catch(() => {

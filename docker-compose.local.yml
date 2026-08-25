@@ -1,0 +1,28 @@
+# Opt-in override for testing the upload/streaming flow from a browser
+# running on the host machine (not just from other containers on this
+# compose network, and not from the docker-compose.e2e.yml stack's
+# in-network Playwright browser — see that file's own docstring for why
+# *that* stack doesn't need this).
+#
+# `docker compose up -d` alone (docker-compose.yml only) is what the
+# backend unit/integration test suites, and CI, run against — the api
+# container hands back presigned S3 URLs pointing at `http://localstack:4566`,
+# which only resolves for other containers on this same compose network.
+# That's fine for those suites (they call the presigned URL from *inside*
+# the network too), but a real browser on the host hitting
+# `http://localhost:8989` can't resolve `localstack` at all, so a real
+# upload or audio playback silently fails there.
+#
+# This override adds the one thing that fixes it for a host browser:
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+#
+# Kept out of docker-compose.yml itself (rather than always-on) because
+# baking AWS_ENDPOINT_URL_PUBLIC into the base file broke
+# tests/integration/test_upload_flow.py and test_processing_flow.py — both
+# call the presigned URL directly via httpx from *inside* the api
+# container, where `http://localhost:4566` means the container itself, not
+# LocalStack.
+services:
+  api:
+    environment:
+      - AWS_ENDPOINT_URL_PUBLIC=http://localhost:4566

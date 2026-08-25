@@ -4,6 +4,12 @@ services:
     environment:
       - SERVICES=s3,sqs,dynamodb,ssm
       - DEBUG=0
+    ports:
+      # Published so a browser on the host (not just containers on this
+      # compose network) can reach the presigned S3 URLs the api container
+      # hands out — see Settings.aws_endpoint_url_public / api's
+      # AWS_ENDPOINT_URL_PUBLIC below.
+      - "4566:4566"
     volumes:
       - "localstack-data:/var/lib/localstack"
     healthcheck:
