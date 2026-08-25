@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { ApiError, getAdminEpisode, publishEpisode, updateEpisode } from "@/lib/api";
-import { getStoredAdminKey } from "@/lib/admin-key";
+import { getStoredToken } from "@/lib/auth";
 import type { Episode, Resource } from "@/lib/types";
 
 // Same reasoning as app/episode/page.tsx: useSearchParams() needs a
@@ -20,13 +20,13 @@ export default function ReviewPage() {
 function ReviewEditor() {
   const searchParams = useSearchParams();
   const id = searchParams.get("id");
-  const adminKey = getStoredAdminKey();
+  const token = getStoredToken();
 
   const [episode, setEpisode] = useState<Episode | null>(null);
   // Initial state already reflects the "can't fetch yet" cases (no admin
   // key, no id) so the effect never needs to call setState synchronously
   // in those branches (see react-hooks/set-state-in-effect).
-  const [loading, setLoading] = useState(!!(adminKey && id));
+  const [loading, setLoading] = useState(!!(token && id));
   const [error, setError] = useState<string | null>(null);
 
   const [title, setTitle] = useState("");
@@ -39,8 +39,8 @@ function ReviewEditor() {
   const [publishError, setPublishError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!adminKey || !id) return;
-    getAdminEpisode(id, adminKey)
+    if (!token || !id) return;
+    getAdminEpisode(id, token)
       .then((data) => {
         setEpisode(data);
         setTitle(data.title);
@@ -49,9 +49,9 @@ function ReviewEditor() {
       })
       .catch(() => setError("Failed to load episode."))
       .finally(() => setLoading(false));
-  }, [id, adminKey]);
+  }, [id, token]);
 
-  if (!adminKey) {
+  if (!token) {
     return (
       <div className="flex flex-col gap-3">
         <p className="text-sm text-red-600 dark:text-red-400">
@@ -91,7 +91,7 @@ function ReviewEditor() {
       const updated = await updateEpisode(
         id as string,
         { title, description, resources },
-        adminKey as string
+        token as string
       );
       setEpisode(updated);
       setSaveMessage("Saved.");
@@ -108,7 +108,7 @@ function ReviewEditor() {
     setPublishing(true);
     setPublishError(null);
     try {
-      const updated = await publishEpisode(id as string, adminKey as string);
+      const updated = await publishEpisode(id as string, token as string);
       setEpisode(updated);
     } catch (err) {
       setPublishError(

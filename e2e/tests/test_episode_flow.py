@@ -34,7 +34,7 @@ STUB_TITLE = "Stubbed Episode Title"
 
 
 def test_upload_edit_publish_and_stream(
-    page: Page, base_url: str, admin_key: str, tiny_audio_file: dict
+    page: Page, base_url: str, admin_credentials: tuple[str, str], tiny_audio_file: dict
 ) -> None:
     # A unique title so this run's episode is unambiguous even if earlier
     # runs left published episodes with the same stubbed default title
@@ -44,7 +44,7 @@ def test_upload_edit_publish_and_stream(
     # --- 1. Admin uploads an episode -----------------------------------
     admin = AdminPage(page)
     admin.goto()
-    admin.login(admin_key)
+    admin.login(*admin_credentials)
     admin.expect_signed_in()
 
     episode_id = admin.upload(tiny_audio_file)

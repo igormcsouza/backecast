@@ -32,14 +32,14 @@ export class ApiError extends Error {
 async function request<T>(
   path: string,
   init: RequestInit = {},
-  adminKey?: string
+  token?: string
 ): Promise<T> {
   const headers = new Headers(init.headers);
   if (init.body && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
-  if (adminKey) {
-    headers.set("X-Admin-Key", adminKey);
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
   }
 
   const response = await fetch(`${API_V1}${path}`, { ...init, headers });
@@ -76,52 +76,52 @@ export function getPublicEpisode(id: string): Promise<Episode> {
   return request<Episode>(`/episodes/${encodeURIComponent(id)}`);
 }
 
-// --- Admin routes (all require X-Admin-Key) -----------------------------
+// --- Admin routes (all require a Cognito bearer token) ------------------
 
 export function createEpisode(
   payload: { filename: string; content_type: string },
-  adminKey: string
+  token: string
 ): Promise<CreateEpisodeResponse> {
   return request<CreateEpisodeResponse>(
     "/episodes",
     { method: "POST", body: JSON.stringify(payload) },
-    adminKey
+    token
   );
 }
 
 export function listAdminEpisodes(
-  adminKey: string,
+  token: string,
   status?: string
 ): Promise<Episode[]> {
   const suffix = status ? `?status=${encodeURIComponent(status)}` : "";
-  return request<Episode[]>(`/episodes/admin${suffix}`, {}, adminKey);
+  return request<Episode[]>(`/episodes/admin${suffix}`, {}, token);
 }
 
-export function getAdminEpisode(id: string, adminKey: string): Promise<Episode> {
+export function getAdminEpisode(id: string, token: string): Promise<Episode> {
   return request<Episode>(
     `/episodes/${encodeURIComponent(id)}/admin`,
     {},
-    adminKey
+    token
   );
 }
 
 export function updateEpisode(
   id: string,
   payload: UpdateEpisodeRequest,
-  adminKey: string
+  token: string
 ): Promise<Episode> {
   return request<Episode>(
     `/episodes/${encodeURIComponent(id)}`,
     { method: "PATCH", body: JSON.stringify(payload) },
-    adminKey
+    token
   );
 }
 
-export function publishEpisode(id: string, adminKey: string): Promise<Episode> {
+export function publishEpisode(id: string, token: string): Promise<Episode> {
   return request<Episode>(
     `/episodes/${encodeURIComponent(id)}/publish`,
     { method: "POST" },
-    adminKey
+    token
   );
 }
 

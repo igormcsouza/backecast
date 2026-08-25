@@ -72,19 +72,7 @@ class DataStack(Stack):
             ),
         )
 
-        # Placeholder value — the real secret is set manually post-deploy via
-        # `aws ssm put-parameter --overwrite`, never committed. A plain
-        # StringParameter (not SecureString) is used because CDK's L2
-        # construct doesn't support SecureString directly; acceptable for a
-        # single dev-only shared admin secret.
-        self.admin_key_param = ssm.StringParameter(
-            self,
-            "AdminKeyParam",
-            parameter_name=f"/backecast/{stage}/admin-key",
-            string_value="changeme-placeholder",
-        )
-
-        # Same pattern, two more placeholder secrets for Phase 5's worker:
+        # Two placeholder secrets for Phase 5's worker:
         # the OpenAI API key (transcription, worker/transcription.py) and
         # the chat-model provider's API key (metadata generation,
         # worker/metadata.py). Two separate parameters — not one shared

@@ -60,10 +60,12 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 2
+      - id: parent
+        run: echo "sha=$(git rev-parse HEAD^)" >> "$GITHUB_OUTPUT"
       - uses: dorny/paths-filter@v3
         id: filter
         with:
-          base: HEAD^
+          base: ${{ steps.parent.outputs.sha }}
           filters: |
             backend:
               - 'backend/**'
@@ -104,7 +106,7 @@ jobs:
       # a human who was never going to be there to answer.
       - run: >
           uv run cdk deploy
-          "Backecast-dev-Data" "Backecast-dev-Api" "Backecast-dev-Pipeline"
+          "Backecast-dev-Data" "Backecast-dev-Auth" "Backecast-dev-Api" "Backecast-dev-Pipeline"
           --require-approval never
 
   # See header comment (2). Reads the API URL directly from the Api
@@ -145,6 +147,15 @@ jobs:
             --output text)
           echo "value=$URL" >> "$GITHUB_OUTPUT"
 
+      - name: Read the Cognito User Pool client id from the Auth stack's CfnOutput
+        id: cognito
+        run: |
+          CLIENT_ID=$(aws cloudformation describe-stacks \
+            --stack-name Backecast-dev-Auth \
+            --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue" \
+            --output text)
+          echo "client_id=$CLIENT_ID" >> "$GITHUB_OUTPUT"
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -163,6 +174,8 @@ jobs:
         working-directory: frontend
         env:
           NEXT_PUBLIC_API_URL: ${{ steps.api_url.outputs.value }}
+          NEXT_PUBLIC_COGNITO_CLIENT_ID: ${{ steps.cognito.outputs.client_id }}
+          NEXT_PUBLIC_COGNITO_REGION: ${{ vars.AWS_DEPLOY_REGION || 'sa-east-1' }}
           NEXT_BASE_PATH: /backecast
 
       - uses: actions/configure-pages@v5

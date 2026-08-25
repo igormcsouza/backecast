@@ -27,7 +27,11 @@ import subprocess
 
 import pytest
 
-ADMIN_KEY = os.environ.get("ADMIN_KEY", "local-dev-admin-key")
+# Fixed local/CI-only creds — frontend/lib/auth.ts's NEXT_PUBLIC_AUTH_STUB
+# accepts exactly this pair instead of calling real Cognito. Never real
+# credentials, see CLAUDE.md.
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "local-dev-admin-password")
 API_URL = os.environ.get("API_URL", "http://localhost:8989").rstrip("/")
 
 
@@ -48,11 +52,10 @@ def base_url() -> str:
 
 
 @pytest.fixture(scope="session")
-def admin_key() -> str:
-    """The shared admin secret. Fixed for local/CI by
-    `scripts/init-localstack.sh` (which seeds it into SSM as
-    `local-dev-admin-key`) — never a real secret, see CLAUDE.md."""
-    return ADMIN_KEY
+def admin_credentials() -> tuple[str, str]:
+    """The fixed local/CI admin username+password (see ADMIN_USERNAME/
+    ADMIN_PASSWORD above) — never real credentials."""
+    return ADMIN_USERNAME, ADMIN_PASSWORD
 
 
 @pytest.fixture(scope="session")

@@ -14,21 +14,21 @@ from playwright.sync_api import Page, expect
 from pages.admin_page import AdminPage
 
 
-def test_wrong_admin_key_is_rejected(page: Page, base_url: str) -> None:
+def test_wrong_admin_credentials_are_rejected(page: Page, base_url: str) -> None:
     admin = AdminPage(page)
     admin.goto()
-    admin.login("definitely-not-the-admin-key")
-    admin.expect_login_error("Invalid admin key.")
+    admin.login("admin", "definitely-not-the-password")
+    admin.expect_login_error("Invalid username or password.")
     # Still on the sign-in form, not the dashboard.
     expect(page.get_by_role("heading", name="Admin sign in")).to_be_visible()
 
 
-def test_correct_admin_key_reaches_dashboard(
-    page: Page, base_url: str, admin_key: str
+def test_correct_admin_credentials_reach_dashboard(
+    page: Page, base_url: str, admin_credentials: tuple[str, str]
 ) -> None:
     admin = AdminPage(page)
     admin.goto()
-    admin.login(admin_key)
+    admin.login(*admin_credentials)
     admin.expect_signed_in()
     # The dashboard's "Sign out" control is the clearest marker that the
     # login gate actually opened, not just that no error rendered.

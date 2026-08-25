@@ -88,7 +88,7 @@ jobs:
       # job (see deploy.yml).
       - run: >
           uv run cdk deploy
-          "Backecast-prod-Data" "Backecast-prod-Api" "Backecast-prod-Pipeline"
+          "Backecast-prod-Data" "Backecast-prod-Auth" "Backecast-prod-Api" "Backecast-prod-Pipeline"
           --require-approval never
 
   # No `deploy-frontend-prod` job here — deliberately. GitHub Pages serves

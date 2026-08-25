@@ -22,6 +22,12 @@ COPY . .
 # not just at container `docker run` time (see lib/api.ts's docstring).
 ARG NEXT_PUBLIC_API_URL=http://api:8000
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+# AUTH_STUB=1: the E2E suite logs in against a fixed local username/
+# password instead of real Cognito (LocalStack Community doesn't include
+# it) — see frontend/lib/auth.ts and backend/app/core/auth.py's matching
+# AUTH_STUB.
+ARG NEXT_PUBLIC_AUTH_STUB=1
+ENV NEXT_PUBLIC_AUTH_STUB=$NEXT_PUBLIC_AUTH_STUB
 # Root-relative, unlike the real GitHub Pages deploy (NEXT_BASE_PATH=/backecast)
 # — this container serves the app at the domain root.
 ENV NEXT_BASE_PATH=

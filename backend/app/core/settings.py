@@ -18,7 +18,18 @@ class Settings(BaseSettings):
     aws_region: str = "sa-east-1"
     aws_endpoint_url: str | None = None  # set thru env vars
     media_bucket_name: str = "backecast-media-dev"
-    admin_key_param_name: str = "/backecast/dev/admin-key"
+
+    # --- Admin auth (Cognito) -----------------------------------------------
+    # AUTH_STUB=1 (same pattern as AI_STUB below): skip real Cognito JWKS
+    # verification entirely and accept a single well-known bearer token
+    # instead. Only ever set locally/in CI — LocalStack Community doesn't
+    # include Cognito, so there's nothing real to point this at there. See
+    # app/core/auth.py.
+    auth_stub: bool = False
+    cognito_user_pool_id: str = ""
+    cognito_client_id: str = ""
+    cognito_region: str = "sa-east-1"
+
     max_upload_bytes: int = 60 * 1024 * 1024  # ~60MB: a 25-min mp3 + headroom
     allowed_content_types: tuple[str, ...] = ("audio/mpeg", "audio/mp4", "audio/x-m4a")
 

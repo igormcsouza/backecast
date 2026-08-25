@@ -31,18 +31,6 @@ else
   }'
 fi
 
-ADMIN_KEY_PARAM="/backecast/dev/admin-key"
-
-# Fixed, known value for local/CI only — integration tests hardcode it.
-# Real AWS gets its value set manually via `aws ssm put-parameter --overwrite`,
-# never committed.
-if awslocal ssm get-parameter --name "$ADMIN_KEY_PARAM" --region "$REGION" >/dev/null 2>&1; then
-  echo "param $ADMIN_KEY_PARAM already exists, skipping"
-else
-  awslocal ssm put-parameter --name "$ADMIN_KEY_PARAM" --type String \
-    --value "local-dev-admin-key" --region "$REGION"
-fi
-
 # Phase 5: the worker's OpenAI/LLM API key params. With AI_STUB=1 (compose's
 # default) these are never actually read — worker/transcription.py and
 # worker/metadata.py short-circuit before hitting SSM — but they're seeded

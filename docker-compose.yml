@@ -41,7 +41,9 @@ services:
       - AWS_ACCESS_KEY_ID=test
       - AWS_SECRET_ACCESS_KEY=test
       - MEDIA_BUCKET_NAME=backecast-media-dev
-      - ADMIN_KEY_PARAM_NAME=/backecast/dev/admin-key
+      # AUTH_STUB=1: skip real Cognito JWKS verification — LocalStack
+      # Community doesn't include Cognito. See app/core/auth.py.
+      - AUTH_STUB=1
     depends_on:
       init:
         condition: service_completed_successfully

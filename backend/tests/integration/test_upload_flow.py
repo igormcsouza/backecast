@@ -59,10 +59,10 @@ def test_create_episode_without_admin_key_is_rejected(http_client):
     assert response.status_code == 401
 
 
-def test_create_episode_with_wrong_admin_key_is_rejected(http_client):
+def test_create_episode_with_wrong_admin_token_is_rejected(http_client):
     response = http_client.post(
         "/api/v1/episodes",
-        headers={"X-Admin-Key": "wrong-key"},
+        headers={"Authorization": "Bearer wrong-token"},
         json={"filename": "ep.mp3", "content_type": "audio/mpeg"},
     )
     assert response.status_code == 401

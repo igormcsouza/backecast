@@ -16,7 +16,10 @@ import pytest
 
 API_BASE_URL = os.environ.get("INTEGRATION_API_URL", "http://api:8000")
 LOCALSTACK_ENDPOINT = os.environ.get("AWS_ENDPOINT_URL", "http://localstack:4566")
-ADMIN_KEY = "local-dev-admin-key"
+# Must match app/core/auth.py's LOCAL_STUB_TOKEN — the API runs with
+# AUTH_STUB=1 in this compose network (see docker-compose.yml), so this is
+# the one bearer token it accepts, not a real Cognito token.
+ADMIN_TOKEN = "local-dev-admin-token"
 TABLE_NAME = os.environ.get("TABLE_NAME", "backecast-dev")
 MEDIA_BUCKET_NAME = os.environ.get("MEDIA_BUCKET_NAME", "backecast-media-dev")
 
@@ -29,7 +32,7 @@ def http_client():
 
 @pytest.fixture
 def admin_headers():
-    return {"X-Admin-Key": ADMIN_KEY}
+    return {"Authorization": f"Bearer {ADMIN_TOKEN}"}
 
 
 @pytest.fixture

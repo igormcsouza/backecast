@@ -6,7 +6,6 @@ from aws_cdk import aws_apigatewayv2_integrations as apigwv2_integrations
 from aws_cdk import aws_dynamodb as dynamodb
 from aws_cdk import aws_lambda as lambda_
 from aws_cdk import aws_s3 as s3
-from aws_cdk import aws_ssm as ssm
 from aws_cdk.aws_lambda_python_alpha import BundlingOptions, PythonFunction
 from constructs import Construct
 
@@ -22,7 +21,8 @@ class ApiStack(Stack):
         stage: str,
         table: dynamodb.Table,
         bucket: s3.Bucket,
-        admin_key_param: ssm.IStringParameter,
+        user_pool_id: str,
+        user_pool_client_id: str,
         **kwargs,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
@@ -50,7 +50,9 @@ class ApiStack(Stack):
                 "STAGE": stage,
                 "TABLE_NAME": table.table_name,
                 "MEDIA_BUCKET_NAME": bucket.bucket_name,
-                "ADMIN_KEY_PARAM_NAME": admin_key_param.parameter_name,
+                "COGNITO_USER_POOL_ID": user_pool_id,
+                "COGNITO_CLIENT_ID": user_pool_client_id,
+                "COGNITO_REGION": self.region,
             },
             timeout=Duration.seconds(10),
             memory_size=256,
@@ -66,9 +68,6 @@ class ApiStack(Stack):
         # without PutObject on the role, S3 rejects the signature at upload
         # time even though the Lambda itself never touches the bytes.
         bucket.grant_put(api_function)
-
-        # Scoped to this parameter's ARN only, not ssm:GetParameter on "*".
-        admin_key_param.grant_read(api_function)
 
         http_api = apigwv2.HttpApi(
             self,

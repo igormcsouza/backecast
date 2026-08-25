@@ -22,8 +22,9 @@ class AdminPage:
 
     # --- Login gate ---------------------------------------------------
 
-    def login(self, admin_key: str) -> None:
-        self.page.get_by_placeholder("Admin key").fill(admin_key)
+    def login(self, username: str, password: str) -> None:
+        self.page.get_by_placeholder("Username").fill(username)
+        self.page.get_by_placeholder("Password").fill(password)
         self.page.get_by_role("button", name="Sign in").click()
 
     def expect_signed_in(self) -> None:

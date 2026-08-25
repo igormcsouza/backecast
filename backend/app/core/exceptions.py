@@ -20,10 +20,11 @@ class AppException(Exception):
 
 
 class AdminAuthError(AppException):
-    """Raised when the X-Admin-Key header is missing or doesn't match SSM."""
+    """Raised when the Authorization bearer token is missing, malformed, or
+    fails Cognito JWT verification."""
 
     status_code = 401
-    message = "Invalid or missing admin key"
+    message = "Invalid or missing admin credentials"
 
 
 async def app_exception_handler(request: Request, exc: AppException) -> JSONResponse:

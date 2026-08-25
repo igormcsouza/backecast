@@ -14,7 +14,8 @@ def synth_template() -> Template:
         stage="dev",
         table=data_stack.table,
         bucket=data_stack.media_bucket,
-        admin_key_param=data_stack.admin_key_param,
+        user_pool_id="us-east-1_test",
+        user_pool_client_id="test-client-id",
     )
     return Template.from_stack(api_stack)
 
@@ -90,21 +91,17 @@ def test_lambda_can_put_objects_in_media_bucket():
     )
 
 
-def test_lambda_can_read_admin_key_param():
+def test_lambda_env_has_cognito_config():
     template = synth_template()
     template.has_resource_properties(
-        "AWS::IAM::Policy",
+        "AWS::Lambda::Function",
         {
-            "PolicyDocument": {
-                "Statement": Match.array_with(
-                    [
-                        Match.object_like(
-                            {
-                                "Action": Match.array_with(["ssm:GetParameter"]),
-                                "Effect": "Allow",
-                            }
-                        )
-                    ]
+            "Environment": {
+                "Variables": Match.object_like(
+                    {
+                        "COGNITO_USER_POOL_ID": "us-east-1_test",
+                        "COGNITO_CLIENT_ID": "test-client-id",
+                    }
                 )
             }
         },

@@ -100,6 +100,7 @@ jobs:
       - run: >
           uv run cdk deploy
           "Backecast-pr-${{ github.event.pull_request.number }}-Data"
+          "Backecast-pr-${{ github.event.pull_request.number }}-Auth"
           "Backecast-pr-${{ github.event.pull_request.number }}-Api"
           "Backecast-pr-${{ github.event.pull_request.number }}-Pipeline"
           -c stage=pr-${{ github.event.pull_request.number }}
@@ -163,7 +164,7 @@ jobs:
       # (S3 bucket, DynamoDB table, Lambda, SQS) silently running forever.
       - run: |
           STACKS=()
-          for name in Pipeline Api Data; do
+          for name in Pipeline Api Auth Data; do
             stack="Backecast-pr-${{ github.event.pull_request.number }}-$name"
             if aws cloudformation describe-stacks --stack-name "$stack" >/dev/null 2>&1; then
               STACKS+=("$stack")

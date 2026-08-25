@@ -9,7 +9,7 @@ import {
   listAdminEpisodes,
   uploadToPresignedPost,
 } from "@/lib/api";
-import { clearStoredAdminKey, getStoredAdminKey, setStoredAdminKey } from "@/lib/admin-key";
+import { clearStoredToken, getStoredToken, setStoredToken, login } from "@/lib/auth";
 import type { Episode, EpisodeStatus } from "@/lib/types";
 
 const ALLOWED_CONTENT_TYPES: Record<string, string> = {
@@ -37,68 +37,76 @@ function guessContentType(filename: string): string | null {
 }
 
 export default function AdminPage() {
-  const [adminKey, setAdminKey] = useState<string | null>(null);
-  const [keyInput, setKeyInput] = useState("");
+  const [token, setToken] = useState<string | null>(null);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   // Lazy initializer (runs once, at first render, not inside the effect
-  // below) — true only when there's a stored key that still needs
+  // below) — true only when there's a stored token that still needs
   // validating, so the effect never has to flip it synchronously for the
   // "nothing stored" case (see react-hooks/set-state-in-effect).
-  const [checkingKey, setCheckingKey] = useState(() => !!getStoredAdminKey());
-  const [keyError, setKeyError] = useState<string | null>(null);
+  const [checkingToken, setCheckingToken] = useState(() => !!getStoredToken());
+  const [loginError, setLoginError] = useState<string | null>(null);
 
-  // On mount, validate a previously-entered key from localStorage against
-  // the admin list route (cheap, side-effect-free) so a stale/rotated key
-  // doesn't silently look "logged in" until the first real action fails.
+  // On mount, validate a previously-issued token from localStorage against
+  // the admin list route (cheap, side-effect-free) so an expired/revoked
+  // token doesn't silently look "logged in" until the first real action
+  // fails.
   useEffect(() => {
-    const stored = getStoredAdminKey();
+    const stored = getStoredToken();
     if (!stored) return;
     listAdminEpisodes(stored)
-      .then(() => setAdminKey(stored))
+      .then(() => setToken(stored))
       .catch(() => {
-        clearStoredAdminKey();
-        setKeyError("Saved admin key is no longer valid — please sign in again.");
+        clearStoredToken();
+        setLoginError("Your session expired — please sign in again.");
       })
-      .finally(() => setCheckingKey(false));
+      .finally(() => setCheckingToken(false));
   }, []);
 
   async function handleLogin(event: React.FormEvent) {
     event.preventDefault();
-    setKeyError(null);
+    setLoginError(null);
     try {
-      await listAdminEpisodes(keyInput);
-      setStoredAdminKey(keyInput);
-      setAdminKey(keyInput);
+      const accessToken = await login(username, password);
+      setStoredToken(accessToken);
+      setToken(accessToken);
     } catch (err) {
-      setKeyError(
-        err instanceof ApiError && err.status === 401
-          ? "Invalid admin key."
-          : "Could not reach the API — check NEXT_PUBLIC_API_URL."
-      );
+      setLoginError(err instanceof Error ? err.message : "Sign in failed.");
     }
   }
 
   function handleLogout() {
-    clearStoredAdminKey();
-    setAdminKey(null);
-    setKeyInput("");
+    clearStoredToken();
+    setToken(null);
+    setUsername("");
+    setPassword("");
   }
 
-  if (checkingKey) {
+  if (checkingToken) {
     return <p className="text-sm text-zinc-500">Checking admin session…</p>;
   }
 
-  if (!adminKey) {
+  if (!token) {
     return (
       <div className="mx-auto flex max-w-sm flex-col gap-4">
         <h1 className="text-xl font-semibold">Admin sign in</h1>
         <form onSubmit={handleLogin} className="flex flex-col gap-3">
           <input
-            type="password"
-            value={keyInput}
-            onChange={(e) => setKeyInput(e.target.value)}
-            placeholder="Admin key"
+            type="text"
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            placeholder="Username"
+            autoComplete="username"
             className="rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
             autoFocus
+          />
+          <input
+            type="password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="Password"
+            autoComplete="current-password"
+            className="rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
           />
           <button
             type="submit"
@@ -107,19 +115,19 @@ export default function AdminPage() {
             Sign in
           </button>
         </form>
-        {keyError && <p className="text-sm text-red-600 dark:text-red-400">{keyError}</p>}
+        {loginError && <p className="text-sm text-red-600 dark:text-red-400">{loginError}</p>}
       </div>
     );
   }
 
-  return <AdminDashboard adminKey={adminKey} onLogout={handleLogout} />;
+  return <AdminDashboard token={token} onLogout={handleLogout} />;
 }
 
 function AdminDashboard({
-  adminKey,
+  token,
   onLogout,
 }: {
-  adminKey: string;
+  token: string;
   onLogout: () => void;
 }) {
   const [reviewQueue, setReviewQueue] = useState<Episode[]>([]);
@@ -127,7 +135,7 @@ function AdminDashboard({
   const [activeUploadId, setActiveUploadId] = useState<string | null>(null);
 
   const refreshQueue = () => {
-    listAdminEpisodes(adminKey, "review")
+    listAdminEpisodes(token, "review")
       .then((items) => {
         setReviewQueue(items);
         setQueueError(null);
@@ -135,7 +143,7 @@ function AdminDashboard({
       .catch(() => setQueueError("Failed to load the review queue."));
   };
 
-  useEffect(refreshQueue, [adminKey]);
+  useEffect(refreshQueue, [token]);
 
   return (
     <div className="flex flex-col gap-10">
@@ -150,11 +158,11 @@ function AdminDashboard({
         </button>
       </div>
 
-      <UploadForm adminKey={adminKey} onUploadStarted={setActiveUploadId} />
+      <UploadForm token={token} onUploadStarted={setActiveUploadId} />
 
       {activeUploadId && (
         <UploadStatus
-          adminKey={adminKey}
+          token={token}
           episodeId={activeUploadId}
           onDone={() => {
             setActiveUploadId(null);
@@ -191,10 +199,10 @@ function AdminDashboard({
 }
 
 function UploadForm({
-  adminKey,
+  token,
   onUploadStarted,
 }: {
-  adminKey: string;
+  token: string;
   onUploadStarted: (episodeId: string) => void;
 }) {
   const [progress, setProgress] = useState<number | null>(null);
@@ -216,7 +224,7 @@ function UploadForm({
     try {
       const created = await createEpisode(
         { filename: file.name, content_type: contentType },
-        adminKey
+        token
       );
       setProgress(0);
       await uploadToPresignedPost(created.upload, file, setProgress);
@@ -265,11 +273,11 @@ const STATUS_LABELS: Record<EpisodeStatus, string> = {
 };
 
 function UploadStatus({
-  adminKey,
+  token,
   episodeId,
   onDone,
 }: {
-  adminKey: string;
+  token: string;
   episodeId: string;
   onDone: () => void;
 }) {
@@ -287,7 +295,7 @@ function UploadStatus({
     // simplest way for the UI to observe an eventual status change.
     async function poll() {
       try {
-        const episode = await getAdminEpisode(episodeId, adminKey);
+        const episode = await getAdminEpisode(episodeId, token);
         if (cancelled) return;
         setStatus(episode.status);
         if (!IN_FLIGHT_STATUSES.includes(episode.status)) {
@@ -309,7 +317,7 @@ function UploadStatus({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [episodeId, adminKey]);
+  }, [episodeId, token]);
 
   return (
     <section className="rounded-lg border border-zinc-200 px-4 py-3 dark:border-zinc-800">
