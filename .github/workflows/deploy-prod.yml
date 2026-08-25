@@ -63,7 +63,6 @@ jobs:
       github.event.inputs.confirm == 'deploy'
     runs-on: ubuntu-latest
     permissions:
-      id-token: write # required to request the GitHub OIDC token — see ci_stack.py
       contents: read
     environment:
       # No required-reviewers rule exists on this yet (that's a repo
@@ -78,11 +77,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Same role as dev (deploy.yml) — see this file's header comment for
-      # why prod doesn't get a separate role the way PR previews do.
       - uses: ./.github/actions/setup-cdk-deploy
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ vars.AWS_DEPLOY_REGION || 'sa-east-1' }}
 
       # Explicit `prod`-stage stack names — `Backecast-Ci` is still never

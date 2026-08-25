@@ -76,7 +76,6 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
-      id-token: write # OIDC token for GithubActionsPreviewDeployRole — see header comment (4)
       contents: read
       pull-requests: write # to leave the preview-ready comment below
     defaults:
@@ -90,7 +89,8 @@ jobs:
 
       - uses: ./.github/actions/setup-cdk-deploy
         with:
-          role-to-assume: ${{ vars.AWS_PREVIEW_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ vars.AWS_DEPLOY_REGION || 'sa-east-1' }}
 
       # `-c stage=pr-<number>` flows through the same stage-parameterization
@@ -127,7 +127,6 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
       contents: read
     defaults:
       run:
@@ -144,7 +143,8 @@ jobs:
 
       - uses: ./.github/actions/setup-cdk-deploy
         with:
-          role-to-assume: ${{ vars.AWS_PREVIEW_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ vars.AWS_DEPLOY_REGION || 'sa-east-1' }}
 
       # Reverse stack order from deploy (Pipeline/Api depend on Data, so

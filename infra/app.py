@@ -2,7 +2,6 @@
 import aws_cdk as cdk
 
 from stacks.api_stack import ApiStack
-from stacks.ci_stack import CiStack
 from stacks.data_stack import DataStack
 from stacks.pipeline_stack import PipelineStack
 
@@ -49,26 +48,6 @@ PipelineStack(
     bucket=data_stack.media_bucket,
     openai_api_key_param=data_stack.openai_api_key_param,
     llm_api_key_param=data_stack.llm_api_key_param,
-    env=env,
-)
-
-# Account-wide, not per-stage (see ci_stack.py's docstring) — instantiated
-# once regardless of which `stage` context this synth ran with. Not part
-# of deploy.yml's automated `cdk deploy` (Phase 8): a workflow can't grant
-# itself the AWS trust it's about to be scoped by, so this one stack is a
-# one-time manual bootstrap for Igor. See SESSIONS.md for the exact steps.
-#
-# Phase 9 note: `prod` and PR previews do NOT get their own `CiStack`. The
-# OIDC provider is still one account-level resource, and the *trust*
-# needed for prod (a tag-push `sub` claim) and for previews (a
-# `pull_request`-event `sub` claim, on a separate, more tightly-scoped
-# role) are both changes to *this same* stack's IAM resources, not new
-# per-stage stacks — see ci_stack.py's module docstring for the reasoning.
-CiStack(
-    app,
-    "Backecast-Ci",
-    github_repo="igormcsouza/backecast",
-    github_branch="main",
     env=env,
 )
 

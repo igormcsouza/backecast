@@ -1,4 +1,4 @@
-name: Set up CDK deploy tooling and AWS OIDC credentials
+name: Set up CDK deploy tooling and AWS credentials
 description: >-
   Shared setup steps for every job that runs `cdk deploy`/`cdk destroy`
   against real AWS (deploy.yml's deploy-backend, deploy-prod.yml's
@@ -10,9 +10,18 @@ description: >-
   commit, a release tag, the PR head, the PR's base branch), so that step
   stays in each workflow rather than being hidden behind an input here.
 
+  Auth: a static IAM user access key (`backecast-github-actions`, member of
+  the same `Projects` IAM group used by Igor's other repos), passed as repo
+  secrets — matching the pattern the rest of Igor's projects use. This repo
+  previously used GitHub OIDC federation (no long-lived keys); switched back
+  to a static key pair for consistency with the other projects' CI setup.
+
 inputs:
-  role-to-assume:
-    description: IAM role ARN to assume via GitHub OIDC (a repo *variable*, not a secret — see the calling workflow's own comment on why that's safe).
+  aws-access-key-id:
+    description: IAM user access key ID (repo secret).
+    required: true
+  aws-secret-access-key:
+    description: IAM user secret access key (repo secret).
     required: true
   aws-region:
     description: AWS region to deploy into.
@@ -33,5 +42,6 @@ runs:
 
     - uses: aws-actions/configure-aws-credentials@v4
       with:
-        role-to-assume: ${{ inputs.role-to-assume }}
+        aws-access-key-id: ${{ inputs.aws-access-key-id }}
+        aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
         aws-region: ${{ inputs.aws-region }}

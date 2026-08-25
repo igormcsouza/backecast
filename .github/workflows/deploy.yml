@@ -1,54 +1,47 @@
 # Phase 8 — continuous deployment. Every push to `main` (i.e. every merge)
-# deploys the whole `dev` stack automatically, with zero long-lived AWS
-# keys ever stored in GitHub. This file is deliberately the *only* trigger
-# shaped like that: Phase 9 added two siblings that reuse the same
-# OIDC/CDK machinery but on very different triggers — `deploy-prod.yml`
-# (a `v*` tag push or a confirmed manual dispatch, never an automatic
-# `push: main`) and `deploy-preview.yml` (per-PR ephemeral stacks, its own
-# more tightly-scoped IAM role). See those files' own header comments for
-# why dev alone gets the "every merge" treatment. Two ideas worth reading
-# before touching this file:
+# deploys whatever actually changed, automatically. This file is
+# deliberately the *only* trigger shaped like that: `deploy-prod.yml` (a
+# `v*` tag push or a confirmed manual dispatch) and `deploy-preview.yml`
+# (per-PR ephemeral stacks) reuse the same CDK machinery on very different
+# triggers — see those files' own header comments for why dev alone gets
+# the "every merge" treatment. Two ideas worth reading before touching this
+# file:
 #
-# 1. GitHub OIDC -> AWS IAM role (deploy-backend, below). The old way to
-#    let a CI job call AWS is an IAM user + access key pair pasted into
-#    repo secrets: a credential that works forever, from anywhere, until
-#    someone remembers to rotate or revoke it. Instead, `configure-aws-
-#    credentials` below asks GitHub's own OIDC token service for a
-#    short-lived signed JWT identifying *this exact workflow run*, and
-#    trades it with AWS STS (`sts:AssumeRoleWithWebIdentity`) for
-#    temporary AWS credentials — no secret ever created, stored, or
-#    rotated. The `permissions: id-token: write` on that job is what lets
-#    the runner request that JWT in the first place; without it there is
-#    nothing to trade. The AWS side of this trust (the OIDC provider + the
-#    IAM role, with a trust policy scoped to *this* repo and the `main`
-#    branch specifically — no other repo or branch can assume it) lives in
-#    `infra/stacks/ci_stack.py`, not here; see that file's docstring for
-#    the full mechanism and SESSIONS.md for Igor's one-time bootstrap
-#    steps this workflow depends on.
+# 1. Auth is a static IAM user access key (`backecast-github-actions`,
+#    repo secrets `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`), the same
+#    pattern Igor's other projects use — see
+#    `.github/actions/setup-cdk-deploy/action.yml`. (This repo briefly used
+#    GitHub OIDC federation instead; switched back for consistency across
+#    projects.)
 #
-# 2. deploy-frontend is the deliberate contrast case. It needs *no* AWS
-#    credentials at all — GitHub Pages isn't AWS, so `actions/deploy-
-#    pages` talks to GitHub's own Pages API using GitHub's own separate
-#    OIDC token (that's what deploy-frontend's own `id-token: write` is
-#    for — a *different* OIDC exchange than deploy-backend's, GitHub<->
-#    GitHub, not GitHub<->AWS; don't confuse the two `id-token: write`
-#    lines for the same mechanism). No `configure-aws-credentials` step,
-#    no role ARN, nothing AWS-shaped appears in that job at all. That
-#    absence is the point, not an oversight: it's proof the OIDC-to-AWS
-#    dance in deploy-backend exists specifically *because* that job talks
-#    to AWS, not because "talking to a cloud API from CI" inherently needs
-#    it.
+# 2. deploy-frontend is the deliberate contrast case within AWS-vs-not: it
+#    needs *no* AWS credentials for the actual publish step — GitHub Pages
+#    isn't AWS, so `actions/deploy-pages` talks to GitHub's own Pages API
+#    using GitHub's own separate OIDC token (that's what deploy-frontend's
+#    `id-token: write` is for — a GitHub<->GitHub exchange, unrelated to
+#    AWS auth). It does still need read-only AWS access to fetch the
+#    already-deployed API URL when only frontend files changed (see the
+#    `changes` job below) — that one AWS call is the only AWS-shaped thing
+#    in that job.
+#
+# 3. Path-based gating (the `changes` job below): a push that only touches
+#    `frontend/` shouldn't trigger a backend CDK deploy, a push that only
+#    touches `backend/`/`infra/` shouldn't trigger a frontend rebuild+
+#    publish, and a docs-only push (README.md, manual.md, SESSIONS.md,
+#    CLAUDE.md) should deploy nothing at all. `dorny/paths-filter` diffs
+#    the single commit CI just validated (`base: HEAD^`, from a 2-commit-
+#    deep checkout) against its parent — cheap and accurate for this
+#    repo's one-commit-per-merge history on `main`.
 name: CD
 
 # Runs after CI finishes on `main`, not on every push directly — a plain
 # `push: branches: [main]` trigger on *this* workflow would let cdk deploy
 # start racing CI's own test run, deploying code CI hasn't finished
 # checking yet. `workflow_run` instead watches the CI workflow (ci.yml)
-# and only fires once it *completes* on `main`; the `if` gate on
-# deploy-backend below then checks it completed with conclusion "success"
-# (CI's own path-filtered jobs skipping is fine — GitHub reports a
-# workflow's overall conclusion as "success" as long as nothing in it
-# actually failed).
+# and only fires once it *completes* on `main`; the `if` gate below then
+# checks it completed with conclusion "success" (CI's own path-filtered
+# jobs skipping is fine — GitHub reports a workflow's overall conclusion as
+# "success" as long as nothing in it actually failed).
 on:
   workflow_run:
     workflows: ["CI"]
@@ -56,17 +49,37 @@ on:
     branches: [main]
 
 jobs:
-  deploy-backend:
+  changes:
     if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 2
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          base: HEAD^
+          filters: |
+            backend:
+              - 'backend/**'
+              - 'infra/**'
+            frontend:
+              - 'frontend/**'
+
+  deploy-backend:
+    needs: changes
+    if: needs.changes.outputs.backend == 'true'
+    runs-on: ubuntu-latest
     permissions:
-      id-token: write # required to request the GitHub OIDC token, see header comment (1)
       contents: read
     defaults:
       run:
         working-directory: infra
-    outputs:
-      api_url: ${{ steps.api_url.outputs.value }}
     steps:
       # Deploy the exact commit CI just passed, not whatever `main` has
       # moved to since (there's no race in practice for a single-writer
@@ -75,56 +88,35 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
 
-      # No AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY anywhere — role-to-
-      # assume is the only AWS-facing input, and it isn't a secret either
-      # (an IAM role ARN grants nothing on its own without a trust policy
-      # match); it's a plain repo *variable*, not a repo *secret*.
       - uses: ./.github/actions/setup-cdk-deploy
         with:
-          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ vars.AWS_DEPLOY_REGION || 'sa-east-1' }}
 
-      # Explicit dev-stage stack names, not `cdk deploy --all` — the app
-      # also defines `Backecast-Ci` (infra/stacks/ci_stack.py), the stack
-      # that *creates* the trust this very job runs under. Automated CI
-      # never deploys that stack: it's a one-time, human-credentialed
-      # bootstrap step (see SESSIONS.md), and keeping it permanently out
-      # of the automated path means this role's own trust policy can only
-      # ever be changed by a human with real AWS credentials, never by a
-      # workflow run — even a compromised one.
-      #
       # --require-approval never: `cdk deploy` normally pauses for an
       # interactive y/n before applying any change that broadens IAM
       # permissions or security group rules. There is no human at a
       # terminal in CI to answer that prompt — left at its default, this
       # step would simply hang until the job times out. Passing this flag
       # is what makes an unattended deploy possible at all; it does not
-      # weaken what the role above is allowed to do, only skips asking a
-      # human who was never going to be there to answer.
+      # weaken what the IAM user above is allowed to do, only skips asking
+      # a human who was never going to be there to answer.
       - run: >
           uv run cdk deploy
           "Backecast-dev-Data" "Backecast-dev-Api" "Backecast-dev-Pipeline"
           --require-approval never
 
-      # deploy-frontend needs the deployed API's URL to bake into the
-      # Next.js static build (see frontend/.env.example) but has no reason
-      # to know CDK/CloudFormation at all — reading the stack's own
-      # `ApiUrl` CfnOutput (infra/stacks/api_stack.py) here and passing it
-      # forward via `outputs:` keeps that CDK-specific knowledge confined
-      # to this job.
-      - name: Read the deployed API URL from the Api stack's CfnOutput
-        id: api_url
-        run: |
-          URL=$(aws cloudformation describe-stacks \
-            --stack-name Backecast-dev-Api \
-            --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" \
-            --output text)
-          echo "value=$URL" >> "$GITHUB_OUTPUT"
-
-  # The contrast case — see header comment (2). Zero AWS credentials, zero
-  # AWS actions, on purpose.
+  # See header comment (2). Reads the API URL directly from the Api
+  # stack's own CfnOutput rather than depending on deploy-backend's
+  # output — deploy-backend may not have run this time (frontend-only
+  # push), so this job resolves the URL for whatever is currently live.
   deploy-frontend:
-    needs: deploy-backend
+    needs: [changes, deploy-backend]
+    if: |
+      always() &&
+      needs.changes.outputs.frontend == 'true' &&
+      (needs.deploy-backend.result == 'success' || needs.deploy-backend.result == 'skipped')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -133,13 +125,25 @@ jobs:
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    defaults:
-      run:
-        working-directory: frontend
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_DEPLOY_REGION || 'sa-east-1' }}
+
+      - name: Read the currently-deployed API URL from the Api stack's CfnOutput
+        id: api_url
+        run: |
+          URL=$(aws cloudformation describe-stacks \
+            --stack-name Backecast-dev-Api \
+            --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" \
+            --output text)
+          echo "value=$URL" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-node@v4
         with:
@@ -147,6 +151,7 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
+        working-directory: frontend
 
       # NEXT_PUBLIC_API_URL is read by lib/api.ts at build time and inlined
       # into the static export's client bundle (see frontend/.env.example).
@@ -155,8 +160,9 @@ jobs:
       # this is the one place that actually sets it for a real deploy;
       # local dev and the e2e Docker build both leave it unset.
       - run: npm run build
+        working-directory: frontend
         env:
-          NEXT_PUBLIC_API_URL: ${{ needs.deploy-backend.outputs.api_url }}
+          NEXT_PUBLIC_API_URL: ${{ steps.api_url.outputs.value }}
           NEXT_BASE_PATH: /backecast
 
       - uses: actions/configure-pages@v5
