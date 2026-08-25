@@ -45,27 +45,28 @@ export default function AdminPage() {
   const [token, setToken] = useState<string | null>(null);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  // Always false on first render, on both the server (build-time export
-  // has no `window`/localStorage at all) and the client — reading
-  // localStorage in a lazy initializer instead made the client's first
-  // render disagree with the statically-exported HTML whenever a token
-  // was already stored, which is exactly a React hydration mismatch, not
-  // just a cosmetic one. Flipping it inside the effect below keeps both
-  // renders identical; the effect then synchronously corrects it before
-  // the "checking session" state would otherwise flash for no reason.
-  const [checkingToken, setCheckingToken] = useState(false);
+  // Always true on first render, on both the server (build-time export
+  // has no `window`/localStorage at all, so it can't know either way) and
+  // the client (checking localStorage happens in the effect below, not
+  // during render — reading it in a lazy initializer instead made the
+  // client's first render disagree with the statically-exported HTML
+  // whenever a token was already stored, a real hydration mismatch, not
+  // just a style choice). Starting `true` everywhere also means the page
+  // never has to guess "sign in" vs "dashboard" before it actually knows —
+  // otherwise the first frame renders the sign-in form (the `!token`
+  // fallback) even for an already-logged-in visitor, a visible flash.
+  const [checkingToken, setCheckingToken] = useState(true);
   const [loginError, setLoginError] = useState<string | null>(null);
 
   useEffect(() => {
     const stored = getStoredToken();
-    if (!stored) return;
-    // `setCheckingToken(true)` deliberately isn't called synchronously
-    // here (see react-hooks/set-state-in-effect) — chaining it onto the
-    // same promise as the actual check keeps this a single async
-    // continuation instead of a synchronous render-triggering call.
-    Promise.resolve()
-      .then(() => setCheckingToken(true))
-      .then(() => listAdminEpisodes(stored))
+    if (!stored) {
+      // Deferred a tick rather than a synchronous setState call here (see
+      // react-hooks/set-state-in-effect).
+      Promise.resolve().then(() => setCheckingToken(false));
+      return;
+    }
+    listAdminEpisodes(stored)
       .then(() => setToken(stored))
       .catch(() => {
         clearStoredToken();
@@ -202,7 +203,11 @@ function AdminDashboard({
           <StatTile icon={Upload} label="Uploaded this month" value={stats.uploadedThisMonth} />
         </div>
 
-        <UploadForm token={token} onUploadStarted={setActiveUploadId} />
+        <UploadForm
+          token={token}
+          onUploadStarted={setActiveUploadId}
+          onUploadFailed={refreshEpisodes}
+        />
 
         {activeUploadId && (
           <UploadStatus
@@ -280,6 +285,12 @@ const STATUS_BADGE_CLASS: Record<EpisodeStatus, string> = {
 
 function EpisodeRow({ episode }: { episode: Episode }) {
   const isReviewReady = episode.status === "review";
+  // In-flight episodes (uploading/processing/transcribing/generating) have
+  // nothing to open yet — the worker is still writing to that row. Every
+  // other status (review, published, rejected, failed) can at least be
+  // opened: review to review-and-publish, the rest to inspect, edit, or
+  // (once backecast#10 lands) delete.
+  const canOpen = !IN_FLIGHT_STATUSES.includes(episode.status);
 
   return (
     <li className="flex items-center gap-3 rounded-xl border border-border bg-surface px-4 py-3">
@@ -297,12 +308,16 @@ function EpisodeRow({ episode }: { episode: Episode }) {
         {STATUS_LABELS[episode.status]}
         {IN_FLIGHT_STATUSES.includes(episode.status) && "…"}
       </span>
-      {isReviewReady && (
+      {canOpen && (
         <Link
           href={`/admin/review?id=${encodeURIComponent(episode.id)}`}
-          className="shrink-0 rounded-full bg-accent px-3 py-1.5 text-xs font-medium text-bg transition hover:bg-accent-strong"
+          className={
+            isReviewReady
+              ? "shrink-0 rounded-full bg-accent px-3 py-1.5 text-xs font-medium text-bg transition hover:bg-accent-strong"
+              : "shrink-0 rounded-full border border-border-strong px-3 py-1.5 text-xs font-medium text-text transition hover:border-accent"
+          }
         >
-          Review
+          {isReviewReady ? "Review" : "Manage"}
         </Link>
       )}
     </li>
@@ -312,9 +327,11 @@ function EpisodeRow({ episode }: { episode: Episode }) {
 function UploadForm({
   token,
   onUploadStarted,
+  onUploadFailed,
 }: {
   token: string;
   onUploadStarted: (episodeId: string) => void;
+  onUploadFailed: () => void;
 }) {
   const [progress, setProgress] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -344,6 +361,12 @@ function UploadForm({
     } catch (err) {
       setProgress(null);
       setError(err instanceof ApiError ? err.message : "Upload failed.");
+      // A failed attempt can still have created an episode row server-side
+      // (e.g. the create succeeded but the S3 upload leg that follows it
+      // didn't, or a retried write raced its own conditional check) —
+      // refreshing here is what surfaces that instead of leaving it stuck
+      // and invisible while the dashboard still says "nothing here yet".
+      onUploadFailed();
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = "";
     }
