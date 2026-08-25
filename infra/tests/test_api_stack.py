@@ -91,6 +91,31 @@ def test_lambda_can_put_objects_in_media_bucket():
     )
 
 
+def test_lambda_can_read_uploads_for_presigned_playback_urls():
+    # Without this, every presigned GET the public episode route mints
+    # (app/episodes/service.py's _with_audio_url) 403s the moment a
+    # browser actually requests it — the signature looks fine, S3 just
+    # refuses the underlying GetObject.
+    template = synth_template()
+    template.has_resource_properties(
+        "AWS::IAM::Policy",
+        {
+            "PolicyDocument": {
+                "Statement": Match.array_with(
+                    [
+                        Match.object_like(
+                            {
+                                "Action": Match.array_with(["s3:GetObject*"]),
+                                "Effect": "Allow",
+                            }
+                        )
+                    ]
+                )
+            }
+        },
+    )
+
+
 def test_lambda_env_has_cognito_config():
     template = synth_template()
     template.has_resource_properties(

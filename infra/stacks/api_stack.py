@@ -69,6 +69,15 @@ class ApiStack(Stack):
         # time even though the Lambda itself never touches the bytes.
         bucket.grant_put(api_function)
 
+        # Same reasoning for playback: the presigned GET the public episode
+        # route hands back (app/episodes/service.py's `_with_audio_url`) is
+        # also just a signature over the Lambda's own credentials — without
+        # GetObject on the role, every presigned URL it mints 403s the
+        # moment a browser actually requests it, even though the signature
+        # itself looks well-formed. Scoped to uploads/* (the only prefix the
+        # API ever reads back) rather than the whole bucket.
+        bucket.grant_read(api_function, objects_key_pattern="uploads/*")
+
         http_api = apigwv2.HttpApi(
             self,
             "HttpApi",
