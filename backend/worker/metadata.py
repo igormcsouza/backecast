@@ -108,7 +108,19 @@ def _get_chain():
         model = init_chat_model(
             model=settings.llm_model, api_key=response["Parameter"]["Value"]
         )
-        _chain = _PROMPT | model.with_structured_output(EpisodeMetadata)
+        # method="function_calling", not the (default) strict json_schema
+        # mode: `Resource.url` is a Pydantic `HttpUrl`, which serializes to
+        # a JSON Schema `{"type": "string", "format": "uri"}` — OpenAI's
+        # strict structured-output mode rejects `format: uri` outright
+        # ("'uri' is not a valid format"). function-calling mode validates
+        # the *response* against the same Pydantic model (still real
+        # validation, still raises on a malformed URL — see
+        # SABOTAGE_INVALID_METADATA below) without asking OpenAI's stricter
+        # schema-compilation step to accept a format keyword it doesn't
+        # support.
+        _chain = _PROMPT | model.with_structured_output(
+            EpisodeMetadata, method="function_calling"
+        )
     return _chain
 
 

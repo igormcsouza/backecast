@@ -60,8 +60,9 @@ def test_non_stub_path_builds_chain_from_settings_llm_model(monkeypatch):
     captured = {}
 
     class FakeModel:
-        def with_structured_output(self, schema):
+        def with_structured_output(self, schema, method=None):
             captured["schema"] = schema
+            captured["method"] = method
             # A real Runnable (not a hand-rolled __or__/__ror__ stand-in) so
             # it composes correctly with the real ChatPromptTemplate via `|`.
             return RunnableLambda(
@@ -81,4 +82,8 @@ def test_non_stub_path_builds_chain_from_settings_llm_model(monkeypatch):
 
     assert captured["model"] == "anthropic:claude-3-5-haiku-latest"
     assert captured["api_key"] == "sk-fake"
+    # function_calling, not the default strict json_schema mode — see
+    # metadata.py's comment on why (Resource.url's HttpUrl -> "format":
+    # "uri" isn't accepted by OpenAI's strict structured-output schema).
+    assert captured["method"] == "function_calling"
     assert isinstance(result, EpisodeMetadata)
