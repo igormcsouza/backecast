@@ -47,7 +47,11 @@ jobs:
           enable-cache: true
           cache-dependency-glob: backend/uv.lock
       - run: uv run ruff check .
-      - run: uv run pytest
+      # Unit tests only — tests/integration/ needs the docker-compose/
+      # LocalStack network (real hostnames like `api`/`localstack`, ffmpeg,
+      # etc.) and is never runnable bare like this; it runs inside the e2e
+      # job below instead, against the actual compose stack.
+      - run: uv run pytest tests --ignore=tests/integration
 
   infra:
     needs: changes
@@ -110,6 +114,15 @@ jobs:
         run: |
           timeout 60 bash -c 'until curl -sf http://localhost:8989/api/v1/health >/dev/null; do sleep 2; done'
           timeout 60 bash -c 'until curl -sf http://localhost:3300/ >/dev/null; do sleep 2; done'
+
+      # Runs inside the `api` container, on the compose network — the only
+      # place these tests are runnable at all (real LocalStack hostnames,
+      # ffmpeg, AUTH_STUB=1 for the admin-auth checks). See CLAUDE.md's
+      # testing-strategy section.
+      - name: Run backend integration tests
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.e2e.yml \
+            run --rm api uv run pytest tests/integration
 
       - name: Run the E2E suite
         run: |
