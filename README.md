@@ -13,15 +13,15 @@ backend API on AWS Lambda + API Gateway (`prod` stage).
                                    ┌─────────────────────────┐
                                    │   Next.js static export │
                                    │      (GitHub Pages)     │
-                                   └────────────┬─────────────┘
+                                   └────────────┬────────────┘
                                                 │ HTTPS
                                                 ▼
                           ┌──────────────────────────────────────┐
-                          │   API Gateway (HTTP API)              │
-                          └────────────────────┬───────────────────┘
-                                                │
-                                                ▼
-                          ┌──────────────────────────────────────┐
+                          │   API Gateway (HTTP API)             │
+                          └────────────────────┬─────────────────┘
+                                               │
+                                               ▼
+                          ┌───────────────────────────────────────┐
                           │   API Lambda (FastAPI + Mangum)       │
                           │   backend/app/                        │
                           └───┬──────────────┬───────────────┬────┘
@@ -29,12 +29,12 @@ backend API on AWS Lambda + API Gateway (`prod` stage).
                 admin routes  │              │               │ public routes
              (Cognito bearer  │              │               │  (no auth)
                      token)   ▼              ▼               ▼
-                    ┌─────────────┐  ┌───────────────┐  ┌──────────┐
+                    ┌──────────────┐  ┌───────────────┐  ┌──────────┐
                     │  Cognito     │  │   DynamoDB    │  │  S3      │
                     │  User Pool   │  │  single table │  │  media   │
                     │ (admin auth) │  │ (episodes +   │  │  bucket  │
-                    └─────────────┘  │  job status)  │  └────┬─────┘
-                                     └───────────────┘       │
+                    └──────────────┘  │  job status)  │  └────┬─────┘
+                                      └───────────────┘       │
                                                               │ s3:ObjectCreated
                                                               │ (uploads/*)
                                                               ▼
@@ -43,7 +43,7 @@ backend API on AWS Lambda + API Gateway (`prod` stage).
                                                      │  (+ DLQ, maxRx=3)│
                                                      └────────┬─────────┘
                                                               ▼
-                                                     ┌──────────────────┐
+                                                     ┌───────────────────┐
                                                      │  Worker Lambda    │
                                                      │  backend/worker/  │
                                                      │  1. ffmpeg        │
@@ -54,7 +54,7 @@ backend API on AWS Lambda + API Gateway (`prod` stage).
                                                      │     metadata gen  │
                                                      │  4. write status  │
                                                      │     to DynamoDB   │
-                                                     └──────────────────┘
+                                                     └───────────────────┘
 
 Upload flow:
   UI ──(1) POST /episodes ────────► API returns a presigned S3 POST
