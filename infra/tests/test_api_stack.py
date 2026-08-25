@@ -7,11 +7,11 @@ from stacks.data_stack import DataStack
 
 def synth_template() -> Template:
     app = cdk.App()
-    data_stack = DataStack(app, "TestDataStack", stage="dev")
+    data_stack = DataStack(app, "TestDataStack", stage="prod")
     api_stack = ApiStack(
         app,
         "TestApiStack",
-        stage="dev",
+        stage="prod",
         table=data_stack.table,
         bucket=data_stack.media_bucket,
         user_pool_id="us-east-1_test",

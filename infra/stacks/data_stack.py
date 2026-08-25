@@ -11,19 +11,18 @@ class DataStack(Stack):
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        # `dev` and PR preview stages (`pr-<number>`, Phase 9) are both
-        # throwaway: dev gets wiped and redeployed on every merge to `main`,
-        # and a preview stack is `cdk destroy`'d the moment its PR closes
-        # (see .github/workflows/deploy-preview.yml). Both need
+        # PR preview stages (`pr-<number>`) are throwaway — `cdk destroy`'d
+        # the moment their PR closes (see
+        # .github/workflows/deploy-preview.yml) — and need
         # `RemovalPolicy.DESTROY` + `auto_delete_objects=True` so teardown
-        # actually succeeds unattended — RETAIN (the default for anything
-        # else, i.e. `prod`) would leave an orphaned bucket/table behind on
-        # every `cdk destroy` and, worse, a non-empty S3 bucket makes
-        # CloudFormation delete fail outright, hanging the preview teardown
-        # job. `prod` deliberately keeps RETAIN: losing production data
-        # because someone fat-fingered a stack deletion is a much worse
-        # outcome than a manual cleanup later.
-        is_ephemeral = stage == "dev" or stage.startswith("pr-")
+        # actually succeeds unattended: RETAIN (the default for `prod`)
+        # would leave an orphaned bucket/table behind on every `cdk
+        # destroy` and, worse, a non-empty S3 bucket makes CloudFormation
+        # delete fail outright, hanging the preview teardown job. `prod`
+        # deliberately keeps RETAIN: losing production data because
+        # someone fat-fingered a stack deletion is a much worse outcome
+        # than a manual cleanup later.
+        is_ephemeral = stage.startswith("pr-")
         removal_policy = RemovalPolicy.DESTROY if is_ephemeral else RemovalPolicy.RETAIN
 
         self.media_bucket = s3.Bucket(

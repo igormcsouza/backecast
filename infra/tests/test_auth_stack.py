@@ -4,7 +4,7 @@ from aws_cdk.assertions import Template
 from stacks.auth_stack import AuthStack
 
 
-def synth_template(stage: str = "dev") -> Template:
+def synth_template(stage: str = "prod") -> Template:
     app = cdk.App()
     stack = AuthStack(app, "TestAuthStack", stage=stage)
     return Template.from_stack(stack)
@@ -35,8 +35,8 @@ def test_client_has_no_secret_and_allows_user_password_auth():
     )
 
 
-def test_dev_pool_is_destroyable():
-    template = synth_template("dev")
+def test_pr_preview_pool_is_destroyable():
+    template = synth_template("pr-999")
     template.has_resource("AWS::Cognito::UserPool", {"DeletionPolicy": "Delete"})
 
 

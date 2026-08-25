@@ -101,14 +101,16 @@ infra/
 └── tests/                  # CDK assertions tests (Template.from_stack)
 ```
 
-- Stages: `dev` (auto-deploys on every push to `main`), `prod` (tag push or
-  confirmed manual dispatch only), `pr-<number>` (ephemeral preview,
-  destroyed on PR close). Stage config lives in `infra/cdk.json`'s
-  `context` block; `pr-*` stages fall back to `dev`'s region.
+- Stages: `prod` (the one, always-on public environment — auto-deploys on
+  every push to `main`) and `pr-<number>` (ephemeral preview, deployed
+  while its PR is open, destroyed on close — that's the pre-merge testing
+  step; there is no separate `dev`). Stage config lives in
+  `infra/cdk.json`'s `context` block; `pr-*` stages fall back to `prod`'s
+  region.
 - Environment config via `cdk.json` context — no hardcoded ARNs.
-- Removal policy: `dev` and `pr-*` stages are `DESTROY` (must tear down
-  cleanly, unattended); `prod` is `RETAIN` (never lose real data to an
-  accidental `cdk destroy`).
+- Removal policy: `pr-*` stages are `DESTROY` (must tear down cleanly,
+  unattended); `prod` is `RETAIN` (never lose real data to an accidental
+  `cdk destroy`).
 - Deploy auth: a static IAM user (`backecast-github-actions`, in the
   shared `Projects` IAM group), access key stored as GitHub Actions
   secrets — not OIDC federation (this repo briefly used OIDC; switched

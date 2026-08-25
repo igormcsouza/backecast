@@ -1,11 +1,13 @@
-# Phase 8 — continuous deployment. Every push to `main` (i.e. every merge)
-# deploys whatever actually changed, automatically. This file is
-# deliberately the *only* trigger shaped like that: `deploy-prod.yml` (a
-# `v*` tag push or a confirmed manual dispatch) and `deploy-preview.yml`
-# (per-PR ephemeral stacks) reuse the same CDK machinery on very different
-# triggers — see those files' own header comments for why dev alone gets
-# the "every merge" treatment. Two ideas worth reading before touching this
-# file:
+# Continuous deployment to `prod` — the one, always-on public environment.
+# Every push to `main` (i.e. every merge) deploys whatever actually
+# changed, automatically. There is no separate `dev` stage anymore: it
+# used to be a permanent always-on environment sitting alongside `prod`,
+# duplicating its cost, while `deploy-preview.yml`'s ephemeral `pr-<number>`
+# stacks already cover pre-merge testing. `main` merging straight to `prod`
+# means PR review + the PR preview stack *are* the pre-production gate —
+# there's no second "deploy to dev, poke it, then promote" step anymore.
+#
+# A few ideas worth reading before touching this file:
 #
 # 1. Auth is a static IAM user access key (`backecast-github-actions`,
 #    repo secrets `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`), the same
@@ -97,6 +99,11 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    environment:
+      # No required-reviewers rule on this yet (a repo Settings ->
+      # Environments change, not a CDK/workflow one) — named here so
+      # turning that on later is zero-code.
+      name: production
     defaults:
       run:
         working-directory: infra
@@ -124,7 +131,7 @@ jobs:
       # a human who was never going to be there to answer.
       - run: >
           uv run cdk deploy
-          "Backecast-dev-Data" "Backecast-dev-Auth" "Backecast-dev-Api" "Backecast-dev-Pipeline"
+          "Backecast-prod-Data" "Backecast-prod-Auth" "Backecast-prod-Api" "Backecast-prod-Pipeline"
           --require-approval never
 
   # See header comment (2). Reads the API URL directly from the Api
@@ -160,7 +167,7 @@ jobs:
         id: api_url
         run: |
           URL=$(aws cloudformation describe-stacks \
-            --stack-name Backecast-dev-Api \
+            --stack-name Backecast-prod-Api \
             --query "Stacks[0].Outputs[?OutputKey=='ApiUrl'].OutputValue" \
             --output text)
           echo "value=$URL" >> "$GITHUB_OUTPUT"
@@ -169,7 +176,7 @@ jobs:
         id: cognito
         run: |
           CLIENT_ID=$(aws cloudformation describe-stacks \
-            --stack-name Backecast-dev-Auth \
+            --stack-name Backecast-prod-Auth \
             --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue" \
             --output text)
           echo "client_id=$CLIENT_ID" >> "$GITHUB_OUTPUT"

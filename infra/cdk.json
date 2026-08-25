@@ -6,10 +6,6 @@
   },
   "context": {
     "account": "693473496042",
-    "dev": {
-      "stage": "dev",
-      "region": "sa-east-1"
-    },
     "prod": {
       "stage": "prod",
       "region": "sa-east-1"

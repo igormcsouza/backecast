@@ -4,8 +4,7 @@
 # well-known attack surface: a malicious PR could otherwise turn "open a
 # PR" into "run arbitrary code with access to deploy credentials." This
 # file leans on several layers of defense, deliberately redundant with
-# each other (see ci_stack.py's module docstring, "Phase 9", for the IAM
-# side of this):
+# each other:
 #
 #   1. The trigger is `pull_request`, never `pull_request_target`. A
 #      `pull_request`-triggered run executes the PR's *own* code (this
@@ -17,10 +16,10 @@
 #      There's no reason for this workflow to ever become
 #      `pull_request_target`.
 #   2. GitHub does not hand a `pull_request`-triggered run repository
-#      secrets, or grant `permissions: id-token: write`'s OIDC token, to a
-#      workflow run triggered by a PR from a *fork* — by platform default.
-#      A fork PR's `deploy-preview`/`destroy-preview` job below would fail
-#      to even request an AWS token, before anything in this file runs.
+#      secrets to a workflow run triggered by a PR from a *fork* — by
+#      platform default. A fork PR's `deploy-preview`/`destroy-preview`
+#      job below would fail to even authenticate to AWS, before anything
+#      in this file runs.
 #   3. Belt-and-suspenders on top of (2), not redundant with it: both jobs
 #      below also explicitly gate on
 #      `github.event.pull_request.head.repo.full_name == github.repository`
@@ -29,15 +28,14 @@
 #      or misunderstood by a future edit to this file; re-checking the
 #      condition explicitly here means this workflow doesn't *rely* on
 #      remembering why (2) is true, it enforces the same boundary itself.
-#   4. IAM-side: a *separate*, more tightly trusted role
-#      (`GithubActionsPreviewDeployRole`, not the same role dev/prod use)
-#      whose trust policy accepts only the `pull_request` event's `sub`
-#      claim — see ci_stack.py's module docstring for the full reasoning,
-#      including the honest limit of what that isolation actually buys
-#      given `cdk bootstrap`'s own default permissions.
+#   4. Same static IAM user (`backecast-github-actions`) as deploy.yml —
+#      no separate role/trust boundary for previews (this repo doesn't use
+#      OIDC federation, see deploy.yml's header comment); the IAM-layer
+#      isolation this project has is whatever the shared `Projects` group
+#      policy grants, not per-workflow scoping.
 #   5. Workflow-level stack-name discipline: every `cdk deploy`/`cdk
 #      destroy` call below only ever names `Backecast-pr-<number>-*`
-#      stacks — `dev`/`prod` stack names never appear in this file.
+#      stacks — `prod` stack names never appear in this file.
 #
 # Teardown (destroy-preview) is not optional. Leaving a preview stack
 # running after its PR closes is exactly the kind of cost/clutter
@@ -94,7 +92,7 @@ jobs:
           aws-region: ${{ vars.AWS_DEPLOY_REGION || 'sa-east-1' }}
 
       # `-c stage=pr-<number>` flows through the same stage-parameterization
-      # mechanism app.py already uses for dev/prod (see app.py's fallback
+      # mechanism app.py already uses for prod (see app.py's fallback
       # for stages with no cdk.json context entry) — the stack names below
       # (`Backecast-pr-<number>-*`) are exactly what that produces.
       - run: >

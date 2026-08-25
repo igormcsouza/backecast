@@ -5,7 +5,7 @@ it and has an LLM generate a title, short description, and resource links →
 admin reviews/edits → publish → public streaming page.
 
 Live: **https://igormcsouza.github.io/backecast/** (frontend, GitHub Pages) ·
-backend API on AWS Lambda + API Gateway (`dev` stage).
+backend API on AWS Lambda + API Gateway (`prod` stage).
 
 ## Architecture
 
@@ -90,8 +90,8 @@ Streaming: the episode's media_url served straight from the S3 bucket
 | AI | Transcription: OpenAI `gpt-4o-mini-transcribe` (~$0.003/min). Metadata generation: LangChain (`init_chat_model`, swappable provider — default OpenAI) |
 | Data | DynamoDB (single table, on-demand billing), S3 (media) |
 | Async pipeline | S3 event → SQS → Worker Lambda, DLQ with `maxReceiveCount=3` |
-| Infra | CDK in Python, one stack per concern (`Data`, `Auth`, `Api`, `Pipeline`), parameterized by stage (`dev`/`prod`/`pr-<n>`) |
-| CI/CD | GitHub Actions — CI on every PR/push (path-filtered per layer); CD on merge to `main` deploys only what changed (backend and/or frontend); `prod` deploys on a version tag or confirmed manual dispatch; ephemeral per-PR preview stacks |
+| Infra | CDK in Python, one stack per concern (`Data`, `Auth`, `Api`, `Pipeline`), parameterized by stage (`prod`/`pr-<n>` — no separate `dev`) |
+| CI/CD | GitHub Actions — CI on every PR/push (path-filtered per layer); CD on merge to `main` deploys `prod`, only the layer(s) that changed (backend and/or frontend); ephemeral per-PR preview stacks are the pre-merge testing step |
 | Local dev | docker-compose: API (`uvicorn --reload`) + worker + LocalStack (S3, SQS, DynamoDB) |
 | Testing | pytest unit + integration (against docker-compose/LocalStack) · CDK assertion tests · Playwright E2E (Python) |
 
@@ -105,13 +105,17 @@ Deploy auth is a static IAM user (`backecast-github-actions`, in the shared
 secrets (`AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`). `AWS_DEPLOY_REGION`
 is a repo variable (defaults to `sa-east-1` if unset).
 
-- **`dev`**: auto-deploys on every push to `main`, but only the layer(s)
-  that actually changed — a frontend-only change skips the backend CDK
-  deploy and vice versa; a docs-only change deploys nothing.
-- **`prod`**: deploys on a `v*` tag push or a manually-confirmed
-  `workflow_dispatch` — never automatically on merge.
+- **`prod`**: the one, always-on public environment. Auto-deploys on every
+  push to `main`, but only the layer(s) that actually changed — a
+  frontend-only change skips the backend CDK deploy and vice versa; a
+  docs-only change deploys nothing. There is no separate `dev` — a merged
+  PR *is* the release. `workflow_dispatch` (Actions tab → CD → Run
+  workflow) force-deploys both layers unconditionally, for the rare case a
+  path-filter gap left a change undeployed.
 - **PR previews**: `Backecast-pr-<number>-*` stacks, deployed on open/push,
-  destroyed unconditionally on PR close.
+  destroyed unconditionally on PR close — this is the pre-merge testing
+  step; review the PR preview's API URL (commented on the PR) before
+  merging.
 
 The admin Cognito user is **not** created by CDK — after `AuthStack`
 deploys, create the single admin user in the Cognito console (AWS Console →

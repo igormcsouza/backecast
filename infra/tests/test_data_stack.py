@@ -6,7 +6,7 @@ from stacks.data_stack import DataStack
 
 def synth_template() -> Template:
     app = cdk.App()
-    stack = DataStack(app, "TestStack", stage="dev")
+    stack = DataStack(app, "TestStack", stage="prod")
     return Template.from_stack(stack)
 
 
@@ -39,16 +39,11 @@ def test_table_has_composite_key_billing_mode_and_gsi():
     )
 
 
-def test_dev_buckets_are_destroyable():
-    template = synth_template()
-    template.has_resource("AWS::S3::Bucket", {"DeletionPolicy": "Delete"})
-
-
 def test_pr_preview_buckets_and_tables_are_destroyable():
-    # Phase 9: a `pr-<number>` stage is torn down (`cdk destroy`) the
-    # moment its PR closes (deploy-preview.yml) — if this stayed on the
-    # RETAIN default, the bucket (non-empty, since it holds uploaded
-    # media) would fail to delete and hang that teardown job every time.
+    # A `pr-<number>` stage is torn down (`cdk destroy`) the moment its PR
+    # closes (deploy-preview.yml) — if this stayed on the RETAIN default,
+    # the bucket (non-empty, since it holds uploaded media) would fail to
+    # delete and hang that teardown job every time.
     app = cdk.App()
     stack = DataStack(app, "TestPreviewStack", stage="pr-999")
     template = Template.from_stack(stack)
@@ -57,9 +52,9 @@ def test_pr_preview_buckets_and_tables_are_destroyable():
 
 
 def test_prod_buckets_and_tables_are_retained():
-    # The flip side: `prod` never gets a `pr-*`/`dev` free pass — a
-    # `cdk destroy` (accidental or deliberate) against prod should leave
-    # the bucket/table behind rather than silently deleting real data.
+    # The flip side: `prod` never gets a `pr-*` free pass — a `cdk
+    # destroy` (accidental or deliberate) against prod should leave the
+    # bucket/table behind rather than silently deleting real data.
     app = cdk.App()
     stack = DataStack(app, "TestProdStack", stage="prod")
     template = Template.from_stack(stack)
@@ -87,9 +82,9 @@ def test_creates_openai_and_llm_api_key_ssm_parameters():
     template.resource_count_is("AWS::SSM::Parameter", 2)
     template.has_resource_properties(
         "AWS::SSM::Parameter",
-        {"Name": "/backecast/dev/openai-api-key"},
+        {"Name": "/backecast/prod/openai-api-key"},
     )
     template.has_resource_properties(
         "AWS::SSM::Parameter",
-        {"Name": "/backecast/dev/llm-api-key"},
+        {"Name": "/backecast/prod/llm-api-key"},
     )

@@ -30,12 +30,12 @@ class AuthStack(Stack):
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        # Same ephemeral-stage reasoning as DataStack (dev and PR previews
-        # are throwaway and must tear down cleanly; prod data must not
-        # vanish on an accidental `cdk destroy`) — a User Pool holding a
-        # real admin identity deserves the same RETAIN-by-default treatment
-        # as the DynamoDB table.
-        is_ephemeral = stage == "dev" or stage.startswith("pr-")
+        # Same ephemeral-stage reasoning as DataStack (PR previews are
+        # throwaway and must tear down cleanly; prod data must not vanish
+        # on an accidental `cdk destroy`) — a User Pool holding a real
+        # admin identity deserves the same RETAIN-by-default treatment as
+        # the DynamoDB table.
+        is_ephemeral = stage.startswith("pr-")
         removal_policy = RemovalPolicy.DESTROY if is_ephemeral else RemovalPolicy.RETAIN
 
         self.user_pool = cognito.UserPool(
