@@ -119,9 +119,23 @@ is a repo variable (defaults to `sa-east-1` if unset).
 
 The admin Cognito user is **not** created by CDK — after `AuthStack`
 deploys, create the single admin user in the Cognito console (AWS Console →
-Cognito → the `backecast-<stage>-admin` pool → Users → Create user), set a
-**permanent** password there (not temporary), and use that username to log
-into `/admin`.
+Cognito → the `backecast-<stage>-admin` pool → Users → Create user).
+
+The console's "Create user" flow only ever sets a *temporary* password —
+there's no UI checkbox for permanent. Logging in with it returns Cognito's
+`NEW_PASSWORD_REQUIRED` challenge instead of tokens, which the frontend's
+login form doesn't handle (shows "unexpected response from Cognito").
+Finish setup with the CLI to set a real, permanent password before the
+first login:
+
+```bash
+aws cognito-idp admin-set-user-password \
+  --user-pool-id <UserPoolId from the Auth stack's outputs> \
+  --username <the admin username> \
+  --password "<a real password>" \
+  --permanent \
+  --region sa-east-1
+```
 
 ## Appendix: local-environment options considered but not adopted
 
