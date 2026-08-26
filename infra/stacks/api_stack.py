@@ -74,9 +74,11 @@ class ApiStack(Stack):
         # also just a signature over the Lambda's own credentials — without
         # GetObject on the role, every presigned URL it mints 403s the
         # moment a browser actually requests it, even though the signature
-        # itself looks well-formed. Scoped to uploads/* (the only prefix the
-        # API ever reads back) rather than the whole bucket.
+        # itself looks well-formed. Scoped to uploads/* and transcripts/*
+        # (the only prefixes the API ever reads back) rather than the whole
+        # bucket.
         bucket.grant_read(api_function, objects_key_pattern="uploads/*")
+        bucket.grant_read(api_function, objects_key_pattern="transcripts/*")
 
         http_api = apigwv2.HttpApi(
             self,
