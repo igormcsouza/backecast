@@ -173,13 +173,27 @@ function TranscriptDisclosure({ episodeId }: { episodeId: string }) {
             {loading && "Loading…"}
             {error && <span className="text-danger">{error}</span>}
             {text !== null && (
-              <p className="max-h-96 overflow-y-auto whitespace-pre-line">{text}</p>
+              <div className="max-h-96 overflow-y-auto">
+                {formatTranscript(text).map((sentence, i) => (
+                  <p key={i}>{sentence}</p>
+                ))}
+              </div>
             )}
           </div>
         )}
       </div>
     </div>
   );
+}
+
+// Display-only: breaks the raw transcript onto one line per sentence
+// (split on ". ") — doesn't touch the stored transcript, just how it's
+// rendered here.
+function formatTranscript(text: string): string[] {
+  return text
+    .split(/(?<=\.)\s+/)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean);
 }
 
 function MoreEpisodes({ excludeId }: { excludeId: string }) {
