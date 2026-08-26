@@ -125,6 +125,23 @@ export function publishEpisode(id: string, token: string): Promise<Episode> {
   );
 }
 
+export function getPublicTranscriptUrl(id: string): Promise<{ url: string }> {
+  return request<{ url: string }>(
+    `/episodes/${encodeURIComponent(id)}/transcript`
+  );
+}
+
+export function getAdminTranscriptUrl(
+  id: string,
+  token: string
+): Promise<{ url: string }> {
+  return request<{ url: string }>(
+    `/episodes/${encodeURIComponent(id)}/transcript/admin`,
+    {},
+    token
+  );
+}
+
 // Direct-to-S3 upload using the presigned POST's fields. Deliberately XHR,
 // not fetch: fetch's upload-progress story (ReadableStream request bodies)
 // isn't reliably supported across browsers yet, while

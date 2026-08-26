@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronLeft } from "lucide-react";
+import { ChevronDown, ChevronLeft, FileText } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
@@ -8,7 +8,12 @@ import CoverArt from "@/components/CoverArt";
 import EpisodePlayer from "@/components/EpisodePlayer";
 import PublicHeader from "@/components/PublicHeader";
 import ResourceList from "@/components/ResourceList";
-import { ApiError, getPublicEpisode, listPublicEpisodes } from "@/lib/api";
+import {
+  ApiError,
+  getPublicEpisode,
+  getPublicTranscriptUrl,
+  listPublicEpisodes,
+} from "@/lib/api";
 import { formatDuration, formatLongDate } from "@/lib/format";
 import type { Episode } from "@/lib/types";
 
@@ -112,8 +117,68 @@ function EpisodeBody({ episode }: { episode: Episode }) {
 
       <ResourceList resources={episode.resources} />
 
+      <TranscriptDisclosure episodeId={episode.id} />
+
       <MoreEpisodes excludeId={episode.id} />
     </article>
+  );
+}
+
+function TranscriptDisclosure({ episodeId }: { episodeId: string }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleToggle() {
+    const next = !open;
+    setOpen(next);
+    if (next && text === null && !loading) {
+      setLoading(true);
+      setError(null);
+      try {
+        const { url } = await getPublicTranscriptUrl(episodeId);
+        const response = await fetch(url);
+        if (!response.ok) throw new Error();
+        setText(await response.text());
+      } catch {
+        setError("Failed to load transcript.");
+      } finally {
+        setLoading(false);
+      }
+    }
+  }
+
+  return (
+    <div>
+      <h2 className="text-xs font-semibold uppercase tracking-wide text-text-muted">
+        Transcript
+      </h2>
+      <div className="mt-2 overflow-hidden rounded-xl border border-border">
+        <button
+          type="button"
+          onClick={handleToggle}
+          aria-expanded={open}
+          className="flex w-full items-center gap-2 px-3 py-2 text-sm text-text transition hover:bg-surface-2"
+        >
+          <FileText size={14} className="shrink-0 text-accent" />
+          <span className="flex-1 truncate text-left">Episode transcript</span>
+          <ChevronDown
+            size={14}
+            className={`shrink-0 text-text-muted transition-transform ${open ? "rotate-180" : ""}`}
+          />
+        </button>
+        {open && (
+          <div className="border-t border-border px-3 py-2.5 text-sm text-text-muted">
+            {loading && "Loading…"}
+            {error && <span className="text-danger">{error}</span>}
+            {text !== null && (
+              <p className="max-h-96 overflow-y-auto whitespace-pre-line">{text}</p>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -142,7 +207,7 @@ function MoreEpisodes({ excludeId }: { excludeId: string }) {
       <h2 className="text-xs font-semibold uppercase tracking-wide text-text-muted">
         More episodes
       </h2>
-      <ul className="mt-2 flex flex-col divide-y divide-border rounded-xl border border-border">
+      <ul className="mt-2 flex flex-col divide-y divide-border overflow-hidden rounded-xl border border-border">
         {episodes.map((episode) => (
           <li key={episode.id}>
             <Link

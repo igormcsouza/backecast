@@ -13,6 +13,8 @@ AI pipeline that normally produces a `review` episode.
 from datetime import UTC, datetime
 from uuid import uuid4
 
+import httpx
+
 
 def _seed_episode(dynamodb_table, *, status: str) -> str:
     episode_id = str(uuid4())
@@ -181,4 +183,74 @@ def test_publish_episode_404s_for_missing_episode(http_client, admin_headers):
     response = http_client.post(
         f"/api/v1/episodes/{uuid4()}/publish", headers=admin_headers
     )
+    assert response.status_code == 404
+
+
+def _seed_transcript(s3_client, episode_id: str, text: str = "stubbed transcript text"):
+    s3_client.put_object(
+        Bucket="backecast-media-dev",
+        Key=f"transcripts/{episode_id}.txt",
+        Body=text.encode("utf-8"),
+        ContentType="text/plain; charset=utf-8",
+    )
+
+
+def test_admin_get_transcript_returns_presigned_url_for_any_status(
+    http_client, admin_headers, dynamodb_table, s3_client
+):
+    episode_id = _seed_episode(dynamodb_table, status="review")
+    _seed_transcript(s3_client, episode_id)
+
+    response = http_client.get(
+        f"/api/v1/episodes/{episode_id}/transcript/admin", headers=admin_headers
+    )
+    assert response.status_code == 200
+    url = response.json()["url"]
+
+    fetched = httpx.get(url)
+    assert fetched.status_code == 200
+    assert fetched.text == "stubbed transcript text"
+
+
+def test_admin_get_transcript_requires_admin_key(http_client, dynamodb_table):
+    episode_id = _seed_episode(dynamodb_table, status="review")
+
+    response = http_client.get(f"/api/v1/episodes/{episode_id}/transcript/admin")
+    assert response.status_code == 401
+
+
+def test_admin_get_transcript_404s_for_missing_episode(http_client, admin_headers):
+    response = http_client.get(
+        f"/api/v1/episodes/{uuid4()}/transcript/admin", headers=admin_headers
+    )
+    assert response.status_code == 404
+
+
+def test_public_get_transcript_returns_presigned_url_for_published_episode(
+    http_client, dynamodb_table, s3_client
+):
+    episode_id = _seed_episode(dynamodb_table, status="published")
+    _seed_transcript(s3_client, episode_id)
+
+    response = http_client.get(f"/api/v1/episodes/{episode_id}/transcript")
+    assert response.status_code == 200
+    url = response.json()["url"]
+
+    fetched = httpx.get(url)
+    assert fetched.status_code == 200
+    assert fetched.text == "stubbed transcript text"
+
+
+def test_public_get_transcript_404s_for_unpublished_episode(
+    http_client, dynamodb_table, s3_client
+):
+    episode_id = _seed_episode(dynamodb_table, status="review")
+    _seed_transcript(s3_client, episode_id)
+
+    response = http_client.get(f"/api/v1/episodes/{episode_id}/transcript")
+    assert response.status_code == 404
+
+
+def test_public_get_transcript_404s_for_missing_episode(http_client):
+    response = http_client.get(f"/api/v1/episodes/{uuid4()}/transcript")
     assert response.status_code == 404
