@@ -7,7 +7,13 @@ import { Suspense, useEffect, useState } from "react";
 import AdminHeader from "@/components/AdminHeader";
 import CoverArt from "@/components/CoverArt";
 import EpisodePlayer from "@/components/EpisodePlayer";
-import { ApiError, getAdminEpisode, publishEpisode, updateEpisode } from "@/lib/api";
+import {
+  ApiError,
+  getAdminEpisode,
+  getAdminTranscriptUrl,
+  publishEpisode,
+  updateEpisode,
+} from "@/lib/api";
 import { getStoredToken } from "@/lib/auth";
 import type { Episode, Resource } from "@/lib/types";
 
@@ -233,7 +239,7 @@ function ReviewEditor() {
           </button>
         </div>
 
-        <TranscriptSection />
+        <TranscriptSection episodeId={episode.id} token={token as string} />
 
         <EpisodePlayer episode={episode} />
 
@@ -277,24 +283,48 @@ function ReviewEditor() {
   );
 }
 
-function TranscriptSection() {
+function TranscriptSection({
+  episodeId,
+  token,
+}: {
+  episodeId: string;
+  token: string;
+}) {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleView() {
+    setLoading(true);
+    setError(null);
+    try {
+      const { url } = await getAdminTranscriptUrl(episodeId, token);
+      window.open(url, "_blank", "noopener,noreferrer");
+    } catch (err) {
+      setError(
+        err instanceof ApiError ? err.message : "Failed to load transcript."
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
   return (
     <div className="flex flex-col gap-2">
       <span className="text-sm font-medium text-text">Transcript</span>
       <div className="flex items-center justify-between rounded-lg border border-dashed border-border-strong bg-surface-2 px-3 py-2.5">
         <span className="flex items-center gap-1.5 text-sm text-text-muted">
-          <FileText size={14} /> The worker writes a full transcript to S3, but no API route
-          exposes it yet.
+          <FileText size={14} /> The raw transcript the AI generated title/description from.
         </span>
         <button
           type="button"
-          disabled
-          title="Needs GET /episodes/{id}/transcript on the backend — see backecast#12"
-          className="shrink-0 cursor-not-allowed rounded-md border border-border-strong px-2.5 py-1 text-xs font-medium text-text-muted opacity-60"
+          onClick={handleView}
+          disabled={loading}
+          className="shrink-0 rounded-md border border-border-strong px-2.5 py-1 text-xs font-medium text-text transition hover:border-accent disabled:cursor-not-allowed disabled:opacity-50"
         >
-          View transcript
+          {loading ? "Loading…" : "View transcript"}
         </button>
       </div>
+      {error && <p className="text-xs text-danger">{error}</p>}
     </div>
   );
 }

@@ -17,7 +17,7 @@ export default function ResourceList({ resources }: { resources: Resource[] }) {
       <h2 className="text-xs font-semibold uppercase tracking-wide text-text-muted">
         Resources
       </h2>
-      <ul className="mt-2 flex flex-col divide-y divide-border rounded-xl border border-border">
+      <ul className="mt-2 flex flex-col divide-y divide-border overflow-hidden rounded-xl border border-border">
         {resources.map((resource) => {
           const Icon = iconFor(resource.label);
           return (

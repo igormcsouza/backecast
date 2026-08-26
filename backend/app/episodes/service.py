@@ -19,6 +19,7 @@ from app.episodes.schemas import (
     GetEpisodeSchema,
     PaginatedEpisodesResponse,
     PresignedPostSchema,
+    TranscriptSchema,
     UpdateEpisodeRequest,
 )
 from app.shared.abstracts import RepositoryAbstract
@@ -92,6 +93,33 @@ class EpisodesService:
             raise EpisodeNotFoundError()
         item = await self._with_audio_url(item)
         return GetEpisodeSchema.model_validate(item)
+
+    async def get_public_transcript_url(self, episode_id: str) -> TranscriptSchema:
+        """`GET /episodes/{id}/transcript` — public. 404s for anything not
+        `status=published`, same rule as `get_public_episode`, so this
+        route can't be used to confirm an unpublished episode's existence
+        either."""
+        item = await self._repository.get(episode_id)
+        if item is None or item.get("status") != EpisodeStatus.PUBLISHED.value:
+            raise EpisodeNotFoundError()
+        key = f"{self._settings.transcript_key_prefix}{episode_id}.txt"
+        url = await create_presigned_get(
+            bucket=self._settings.media_bucket_name, key=key
+        )
+        return TranscriptSchema(url=url)
+
+    async def get_transcript_url(self, episode_id: str) -> TranscriptSchema:
+        """`GET /episodes/{id}/transcript` — admin-only. The transcript key
+        is deterministic (worker writes it the same way) and never stored
+        on the item, so it's derived here rather than read off the repo."""
+        item = await self._repository.get(episode_id)
+        if item is None:
+            raise EpisodeNotFoundError()
+        key = f"{self._settings.transcript_key_prefix}{episode_id}.txt"
+        url = await create_presigned_get(
+            bucket=self._settings.media_bucket_name, key=key
+        )
+        return TranscriptSchema(url=url)
 
     async def update_episode(
         self, episode_id: str, payload: UpdateEpisodeRequest

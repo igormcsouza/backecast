@@ -16,6 +16,7 @@ from app.episodes.schemas import (
     EpisodeStatus,
     GetEpisodeSchema,
     PaginatedEpisodesResponse,
+    TranscriptSchema,
     UpdateEpisodeRequest,
 )
 from app.episodes.service import (
@@ -84,6 +85,33 @@ async def get_admin_episode(
     """Admin variant of the detail route — works for any status. Used for
     post-upload status polling and for loading the review/edit view."""
     return await service.get_admin_episode(episode_id)
+
+
+@episodes_router.get(
+    "/{episode_id}/transcript",
+    summary="Get a presigned URL for a published episode's transcript (public)",
+)
+async def get_episode_transcript(
+    episode_id: str,
+    service: EpisodesService = Depends(get_episodes_service),
+) -> TranscriptSchema:
+    """Public: presigned GET for the raw transcript S3 object the worker
+    wrote during transcription. 404s for anything not `status=published`,
+    same rule as the public episode detail route."""
+    return await service.get_public_transcript_url(episode_id)
+
+
+@episodes_router.get(
+    "/{episode_id}/transcript/admin",
+    summary="Get a presigned URL for any episode's transcript, any status (admin)",
+    dependencies=[Depends(require_admin_key)],
+)
+async def get_admin_episode_transcript(
+    episode_id: str,
+    service: EpisodesService = Depends(get_episodes_service),
+) -> TranscriptSchema:
+    """Admin variant — works for any status, used by the review view."""
+    return await service.get_transcript_url(episode_id)
 
 
 @episodes_router.post(

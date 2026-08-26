@@ -120,6 +120,13 @@ class UpdateEpisodeRequest(BaseModel):
     resources: list[Resource] | None = None
 
 
+class TranscriptSchema(BaseModel):
+    """Presigned GET for the raw transcript S3 object the worker wrote
+    during transcription."""
+
+    url: str
+
+
 class PaginatedEpisodesResponse(BaseModel):
     """The public `GET /episodes` list shape.
 
