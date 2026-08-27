@@ -33,9 +33,13 @@ def test_non_stub_path_fetches_key_from_ssm_and_calls_openai(monkeypatch, tmp_pa
         lambda Name, WithDecryption: {"Parameter": {"Value": "sk-fake"}},
     )
 
+    fake_segment = MagicMock(text=" real transcript. ", start=0.0, end=2.0)
+    fake_word = MagicMock(word="real", start=0.0, end=0.5)
     fake_client = MagicMock()
     fake_client.audio.transcriptions.create.return_value = MagicMock(
-        text="real transcript"
+        text="real transcript.",
+        segments=[fake_segment],
+        words=[fake_word],
     )
     monkeypatch.setattr(transcription, "OpenAI", lambda api_key: fake_client)
 
@@ -44,6 +48,16 @@ def test_non_stub_path_fetches_key_from_ssm_and_calls_openai(monkeypatch, tmp_pa
 
     result = transcription.transcribe_audio(str(audio_file))
 
-    assert result == "real transcript"
+    assert result == {
+        "text": "real transcript.",
+        "segments": [
+            {
+                "text": "real transcript.",
+                "start": 0.0,
+                "end": 2.0,
+                "words": [{"word": "real", "start": 0.0, "end": 0.5}],
+            }
+        ],
+    }
     # Cached for the next call within the same (warm) container.
     assert transcription._openai_client is fake_client

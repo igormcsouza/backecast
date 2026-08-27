@@ -4,6 +4,7 @@ import { ChevronDown, ChevronLeft, FileText } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
+import { usePlayer } from "@/components/AudioProvider";
 import CoverArt from "@/components/CoverArt";
 import EpisodePlayer from "@/components/EpisodePlayer";
 import PublicHeader from "@/components/PublicHeader";
@@ -15,7 +16,7 @@ import {
   listPublicEpisodes,
 } from "@/lib/api";
 import { formatDuration, formatLongDate } from "@/lib/format";
-import type { Episode } from "@/lib/types";
+import type { Episode, Transcript, TranscriptSegment } from "@/lib/types";
 
 // `useSearchParams()` requires a <Suspense> boundary even in a fully
 // client-rendered, statically-exported page — Next.js enforces this so a
@@ -124,23 +125,50 @@ function EpisodeBody({ episode }: { episode: Episode }) {
   );
 }
 
+// Segments come back from whisper-1 already split at natural sentence/
+// pause boundaries — this just groups consecutive segments into paragraphs
+// once the running length passes PARAGRAPH_CHAR_TARGET, so long episodes
+// don't render as one wall-to-wall block. Never rewrites the segment text
+// itself, only where the paragraph breaks fall.
+const PARAGRAPH_CHAR_TARGET = 320;
+
+function groupIntoParagraphs(segments: TranscriptSegment[]): TranscriptSegment[][] {
+  const paragraphs: TranscriptSegment[][] = [];
+  let current: TranscriptSegment[] = [];
+  let currentLength = 0;
+
+  for (const segment of segments) {
+    current.push(segment);
+    currentLength += segment.text.length;
+    if (currentLength >= PARAGRAPH_CHAR_TARGET) {
+      paragraphs.push(current);
+      current = [];
+      currentLength = 0;
+    }
+  }
+  if (current.length > 0) paragraphs.push(current);
+  return paragraphs;
+}
+
 function TranscriptDisclosure({ episodeId }: { episodeId: string }) {
   const [open, setOpen] = useState(false);
-  const [text, setText] = useState<string | null>(null);
+  const [transcript, setTranscript] = useState<Transcript | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { episode: current, currentTime, seek } = usePlayer();
+  const isCurrent = current?.id === episodeId;
 
   async function handleToggle() {
     const next = !open;
     setOpen(next);
-    if (next && text === null && !loading) {
+    if (next && transcript === null && !loading) {
       setLoading(true);
       setError(null);
       try {
         const { url } = await getPublicTranscriptUrl(episodeId);
         const response = await fetch(url);
         if (!response.ok) throw new Error();
-        setText(await response.text());
+        setTranscript((await response.json()) as Transcript);
       } catch {
         setError("Failed to load transcript.");
       } finally {
@@ -148,6 +176,8 @@ function TranscriptDisclosure({ episodeId }: { episodeId: string }) {
       }
     }
   }
+
+  const paragraphs = transcript ? groupIntoParagraphs(transcript.segments) : [];
 
   return (
     <div>
@@ -172,10 +202,40 @@ function TranscriptDisclosure({ episodeId }: { episodeId: string }) {
           <div className="border-t border-border px-3 py-2.5 text-sm text-text-muted">
             {loading && "Loading…"}
             {error && <span className="text-danger">{error}</span>}
-            {text !== null && (
+            {transcript !== null && (
               <div className="max-h-96 overflow-y-auto">
-                {formatTranscript(text).map((sentence, i) => (
-                  <p key={i}>{sentence}</p>
+                {paragraphs.map((paragraph, i) => (
+                  <p key={i} className="mb-3 leading-relaxed last:mb-0">
+                    {paragraph.map((segment, si) =>
+                      segment.words.length > 0 ? (
+                        segment.words.map((word, wi) => {
+                          const active =
+                            isCurrent &&
+                            currentTime >= word.start &&
+                            currentTime < word.end;
+                          return (
+                            <span
+                              key={`${si}-${wi}`}
+                              onClick={() => seek(word.start)}
+                              className={`cursor-pointer rounded px-0.5 transition-colors hover:bg-surface-2 ${
+                                active ? "bg-accent/20 text-text" : ""
+                              }`}
+                            >
+                              {word.word}{" "}
+                            </span>
+                          );
+                        })
+                      ) : (
+                        <span
+                          key={si}
+                          onClick={() => seek(segment.start)}
+                          className="cursor-pointer rounded px-0.5 transition-colors hover:bg-surface-2"
+                        >
+                          {segment.text}{" "}
+                        </span>
+                      )
+                    )}
+                  </p>
                 ))}
               </div>
             )}
@@ -184,16 +244,6 @@ function TranscriptDisclosure({ episodeId }: { episodeId: string }) {
       </div>
     </div>
   );
-}
-
-// Display-only: breaks the raw transcript onto one line per sentence
-// (split on ". ") — doesn't touch the stored transcript, just how it's
-// rendered here.
-function formatTranscript(text: string): string[] {
-  return text
-    .split(/(?<=\.)\s+/)
-    .map((sentence) => sentence.trim())
-    .filter(Boolean);
 }
 
 function MoreEpisodes({ excludeId }: { excludeId: string }) {

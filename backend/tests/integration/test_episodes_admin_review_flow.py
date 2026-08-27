@@ -10,6 +10,7 @@ auth gate, status filtering, and status-transition guards, not about the
 AI pipeline that normally produces a `review` episode.
 """
 
+import json
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -187,11 +188,17 @@ def test_publish_episode_404s_for_missing_episode(http_client, admin_headers):
 
 
 def _seed_transcript(s3_client, episode_id: str, text: str = "stubbed transcript text"):
+    body = json.dumps(
+        {
+            "text": text,
+            "segments": [{"text": text, "start": 0.0, "end": 1.0, "words": []}],
+        }
+    )
     s3_client.put_object(
         Bucket="backecast-media-dev",
-        Key=f"transcripts/{episode_id}.txt",
-        Body=text.encode("utf-8"),
-        ContentType="text/plain; charset=utf-8",
+        Key=f"transcripts/{episode_id}.json",
+        Body=body.encode("utf-8"),
+        ContentType="application/json; charset=utf-8",
     )
 
 
@@ -209,7 +216,7 @@ def test_admin_get_transcript_returns_presigned_url_for_any_status(
 
     fetched = httpx.get(url)
     assert fetched.status_code == 200
-    assert fetched.text == "stubbed transcript text"
+    assert fetched.json()["text"] == "stubbed transcript text"
 
 
 def test_admin_get_transcript_requires_admin_key(http_client, dynamodb_table):
@@ -238,7 +245,7 @@ def test_public_get_transcript_returns_presigned_url_for_published_episode(
 
     fetched = httpx.get(url)
     assert fetched.status_code == 200
-    assert fetched.text == "stubbed transcript text"
+    assert fetched.json()["text"] == "stubbed transcript text"
 
 
 def test_public_get_transcript_404s_for_unpublished_episode(

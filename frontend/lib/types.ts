@@ -32,6 +32,27 @@ export interface Episode {
   resources: Resource[];
 }
 
+// Mirrors worker/transcription.py's Transcript/TranscriptSegment/
+// TranscriptWord TypedDicts — the JSON stored at transcripts/{id}.json and
+// served (as a presigned URL) via GET /episodes/{id}/transcript[/admin].
+export interface TranscriptWord {
+  word: string;
+  start: number;
+  end: number;
+}
+
+export interface TranscriptSegment {
+  text: string;
+  start: number;
+  end: number;
+  words: TranscriptWord[];
+}
+
+export interface Transcript {
+  text: string;
+  segments: TranscriptSegment[];
+}
+
 // Mirrors PaginatedEpisodesResponse.
 export interface PaginatedEpisodes {
   items: Episode[];

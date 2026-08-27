@@ -114,7 +114,7 @@ def stub_ffmpeg_and_s3(monkeypatch):
     )
     monkeypatch.setattr(
         worker_handler,
-        "_read_transcript",
+        "_read_transcript_text",
         lambda bucket, episode_id: "fake transcript text",
     )
 
@@ -259,7 +259,7 @@ def test_resumes_from_generating_by_rereading_transcript_from_s3(
     read_calls = []
     monkeypatch.setattr(
         worker_handler,
-        "_read_transcript",
+        "_read_transcript_text",
         lambda bucket, eid: read_calls.append(eid) or "fake transcript text",
     )
 

@@ -217,7 +217,7 @@ def _current_status(episode_id: str) -> str | None:
 
 
 def _transcript_key(episode_id: str) -> str:
-    return f"{TRANSCRIPT_KEY_PREFIX}{episode_id}.txt"
+    return f"{TRANSCRIPT_KEY_PREFIX}{episode_id}.json"
 
 
 def _download_audio(bucket: str, key: str, episode_id: str) -> str:
@@ -248,18 +248,21 @@ def _preprocess_audio(bucket: str, key: str, episode_id: str) -> str:
     return compressed_path
 
 
-def _write_transcript(bucket: str, episode_id: str, text: str) -> None:
+def _write_transcript(bucket: str, episode_id: str, transcript: dict) -> None:
     _s3.put_object(
         Bucket=bucket,
         Key=_transcript_key(episode_id),
-        Body=text.encode("utf-8"),
-        ContentType="text/plain; charset=utf-8",
+        Body=json.dumps(transcript).encode("utf-8"),
+        ContentType="application/json; charset=utf-8",
     )
 
 
-def _read_transcript(bucket: str, episode_id: str) -> str:
+def _read_transcript_text(bucket: str, episode_id: str) -> str:
+    """Plain text only — the LangChain metadata chain (worker/metadata.py)
+    wants prose, not the structured segment/word timestamps."""
     response = _s3.get_object(Bucket=bucket, Key=_transcript_key(episode_id))
-    return response["Body"].read().decode("utf-8")
+    transcript = json.loads(response["Body"].read().decode("utf-8"))
+    return transcript["text"]
 
 
 def _mark_failed_best_effort(episode_id: str) -> None:
@@ -374,11 +377,11 @@ def _advance_transcribing(
             return EpisodeStatus.REJECTED.value
 
     try:
-        transcript_text = transcribe_audio(compressed_path)
+        transcript = transcribe_audio(compressed_path)
     finally:
         audio.cleanup(compressed_path)
 
-    _write_transcript(bucket, episode_id, transcript_text)
+    _write_transcript(bucket, episode_id, transcript)
     moved = _transition(
         episode_id, EpisodeStatus.TRANSCRIBING, EpisodeStatus.GENERATING
     )
@@ -392,7 +395,7 @@ def _advance_generating(bucket: str, episode_id: str) -> None:
     # transition redelivers here with no in-memory transcript, but the S3
     # object is already durably written, so this stage's redo cost is just
     # the LLM call, not another OpenAI transcription charge.
-    transcript_text = _read_transcript(bucket, episode_id)
+    transcript_text = _read_transcript_text(bucket, episode_id)
     episode_metadata = generate_metadata(transcript_text)
     _transition(
         episode_id,
