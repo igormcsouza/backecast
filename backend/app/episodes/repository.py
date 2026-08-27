@@ -42,6 +42,17 @@ def _decode_cursor(cursor: str) -> dict:
     return json.loads(base64.urlsafe_b64decode(cursor.encode()).decode())
 
 
+def _encode_sort_cursor(offset: int) -> str:
+    return _encode_cursor({"sort": "longest", "offset": offset})
+
+
+def _decode_sort_cursor(cursor: str) -> int:
+    decoded = _decode_cursor(cursor)
+    if decoded.get("sort") != "longest" or not isinstance(decoded.get("offset"), int):
+        raise ValueError("cursor does not belong to the longest sort")
+    return decoded["offset"]
+
+
 class EpisodesRepository(RepositoryAbstract):
     def __init__(self, table: Any) -> None:
         self._table = table
@@ -73,7 +84,7 @@ class EpisodesRepository(RepositoryAbstract):
         return response["Items"]
 
     async def list_published_page(
-        self, limit: int, cursor: str | None
+        self, limit: int, cursor: str | None, sort: str = "newest"
     ) -> tuple[list[dict], str | None]:
         """One page of `status=published` episodes, newest-created first.
 
@@ -101,15 +112,45 @@ class EpisodesRepository(RepositoryAbstract):
                 ":pk": "EPISODE",
                 ":status": EpisodeStatus.PUBLISHED.value,
             },
-            # GSI1SK is `{created_at}#{id}` — DynamoDB queries ascending by
-            # sort key by default, which is oldest-first; this flips it to
-            # match the "newest-created first" contract this method (and
-            # its docstring, and every caller) already assumes.
-            "ScanIndexForward": False,
+            # GSI1SK is `{created_at}#{id}`; ascending is oldest-first.
+            "ScanIndexForward": sort != "newest",
             "Limit": limit,
         }
         if cursor:
             kwargs["ExclusiveStartKey"] = _decode_cursor(cursor)
+
+        if sort == "longest":
+            # Duration is not a key in the existing GSI. Read the published
+            # catalog, then sort before slicing; sorting one page would make
+            # cursor pagination incorrect.
+            items: list[dict] = []
+            last_key = None
+            while True:
+                page_kwargs = dict(kwargs)
+                page_kwargs.pop("ExclusiveStartKey", None)
+                page_kwargs.pop("Limit", None)
+                page_kwargs["ScanIndexForward"] = False
+                if last_key:
+                    page_kwargs["ExclusiveStartKey"] = last_key
+                response = await self._table.query(**page_kwargs)
+                items.extend(response["Items"])
+                last_key = response.get("LastEvaluatedKey")
+                if not last_key:
+                    break
+            items.sort(
+                key=lambda item: (
+                    item.get("duration", 0),
+                    item.get("created_at", ""),
+                ),
+                reverse=True,
+            )
+            offset = _decode_sort_cursor(cursor) if cursor else 0
+            page = items[offset : offset + limit]
+            next_offset = offset + len(page)
+            next_cursor = (
+                _encode_sort_cursor(next_offset) if next_offset < len(items) else None
+            )
+            return page, next_cursor
 
         response = await self._table.query(**kwargs)
 

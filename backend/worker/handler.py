@@ -227,9 +227,9 @@ def _download_audio(bucket: str, key: str, episode_id: str) -> str:
     return local_path
 
 
-def _preprocess_audio(bucket: str, key: str, episode_id: str) -> str:
+def _preprocess_audio(bucket: str, key: str, episode_id: str) -> tuple[str, float]:
     """Download the raw upload and ffmpeg-preprocess it. Returns the local
-    path of the compressed, transcription-ready file.
+    path of the compressed, transcription-ready file and source duration.
 
     Raises audio.EpisodeTooLongError (via audio.preprocess's duration check,
     run before any transcoding) if the source exceeds
@@ -242,10 +242,12 @@ def _preprocess_audio(bucket: str, key: str, episode_id: str) -> str:
         tempfile.gettempdir(), f"{episode_id}-compressed.m4a"
     )
     try:
-        audio.preprocess(raw_path, compressed_path, MAX_EPISODE_DURATION_SECONDS)
+        duration = audio.preprocess(
+            raw_path, compressed_path, MAX_EPISODE_DURATION_SECONDS
+        )
     finally:
         audio.cleanup(raw_path)
-    return compressed_path
+    return compressed_path, duration
 
 
 def _write_transcript(bucket: str, episode_id: str, transcript: dict) -> None:
@@ -314,7 +316,10 @@ def _advance_processing(
         time.sleep(SABOTAGE_SLEEP_SECONDS)
 
     try:
-        compressed_path = _preprocess_audio(bucket, key, episode_id)
+        processed = _preprocess_audio(bucket, key, episode_id)
+        compressed_path, duration = (
+            processed if isinstance(processed, tuple) else (processed, None)
+        )
     except audio.EpisodeTooLongError as e:
         # Straight to `rejected`, not `failed` — this is an expected,
         # handled outcome (no transcription attempt, no OpenAI cost), not a
@@ -332,7 +337,10 @@ def _advance_processing(
         return None, None
 
     moved = _transition(
-        episode_id, EpisodeStatus.PROCESSING, EpisodeStatus.TRANSCRIBING
+        episode_id,
+        EpisodeStatus.PROCESSING,
+        EpisodeStatus.TRANSCRIBING,
+        extra_attributes={"duration": round(duration)} if duration is not None else None,
     )
     if not moved:
         # Lost a race with a concurrent delivery of the same message — it
@@ -363,7 +371,8 @@ def _advance_transcribing(
         # episode shouldn't get a different terminal status just because it
         # happened to be caught the second time instead of the first.
         try:
-            compressed_path = _preprocess_audio(bucket, key, episode_id)
+            processed = _preprocess_audio(bucket, key, episode_id)
+            compressed_path = processed[0] if isinstance(processed, tuple) else processed
         except audio.EpisodeTooLongError as e:
             _transition(episode_id, EpisodeStatus.TRANSCRIBING, EpisodeStatus.REJECTED)
             logger.warning(

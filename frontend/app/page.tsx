@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import PublicHeader from "@/components/PublicHeader";
-import SortChips from "@/components/SortChips";
+import SortChips, { type SortOption } from "@/components/SortChips";
 import { EpisodeGridCard, LatestEpisodeHero } from "@/components/EpisodeCard";
 import { ApiError, listPublicEpisodes } from "@/lib/api";
 import type { Episode } from "@/lib/types";
@@ -15,10 +15,11 @@ export default function HomePage() {
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sort, setSort] = useState<SortOption>("newest");
 
   useEffect(() => {
     let cancelled = false;
-    listPublicEpisodes(PAGE_SIZE)
+    listPublicEpisodes(PAGE_SIZE, null, sort)
       .then((page) => {
         if (cancelled) return;
         setEpisodes(page.items);
@@ -35,13 +36,23 @@ export default function HomePage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [sort]);
+
+  function changeSort(nextSort: SortOption) {
+    if (nextSort !== sort) {
+      setEpisodes([]);
+      setCursor(null);
+      setError(null);
+      setLoading(true);
+      setSort(nextSort);
+    }
+  }
 
   async function loadMore() {
     if (!cursor) return;
     setLoadingMore(true);
     try {
-      const page = await listPublicEpisodes(PAGE_SIZE, cursor);
+      const page = await listPublicEpisodes(PAGE_SIZE, cursor, sort);
       setEpisodes((prev) => [...prev, ...page.items]);
       setCursor(page.cursor);
     } catch (err) {
@@ -77,7 +88,7 @@ export default function HomePage() {
               <h2 className="text-sm font-semibold uppercase tracking-wide text-text-muted">
                 All episodes
               </h2>
-              <SortChips />
+              <SortChips value={sort} onChange={changeSort} />
             </div>
 
             <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
