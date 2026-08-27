@@ -249,7 +249,7 @@ class EpisodesRepository(RepositoryAbstract):
         try:
             response = await self._table.update_item(
                 Key={"PK": f"EPISODE#{episode_id}", "SK": f"EPISODE#{episode_id}"},
-                UpdateExpression="SET #status = :to, updated_at = :now",
+                UpdateExpression="SET #status = :to, updated_at = :now, release_date = :now",
                 ConditionExpression="#status = :from",
                 ExpressionAttributeNames={"#status": "status"},
                 ExpressionAttributeValues={
