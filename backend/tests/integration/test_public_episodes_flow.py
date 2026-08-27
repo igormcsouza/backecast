@@ -15,9 +15,16 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 
-def _seed_episode(dynamodb_table, *, status: str, audio_key: str | None = None) -> str:
+def _seed_episode(
+    dynamodb_table,
+    *,
+    status: str,
+    audio_key: str | None = None,
+    duration: int = 60,
+    created_at: str | None = None,
+) -> str:
     episode_id = str(uuid4())
-    now = datetime.now(UTC).isoformat()
+    now = created_at or datetime.now(UTC).isoformat()
     dynamodb_table.put_item(
         Item={
             "PK": f"EPISODE#{episode_id}",
@@ -28,7 +35,7 @@ def _seed_episode(dynamodb_table, *, status: str, audio_key: str | None = None) 
             "title": f"Episode {episode_id[:8]}",
             "description": "A seeded test episode.",
             "status": status,
-            "duration": 60,
+            "duration": duration,
             "release_date": now,
             "audio_url": None,
             "audio_key": audio_key or f"uploads/{episode_id}.mp3",
@@ -90,9 +97,53 @@ def test_get_episodes_pagination_cursor_reaches_every_published_episode(
             break
     else:
         raise AssertionError("cursor never became None — pagination isn't terminating")
-
     assert seeded_ids.issubset(seen_ids)
 
+
+def test_get_episodes_supports_oldest_sort(http_client, dynamodb_table):
+    newer_id = _seed_episode(
+        dynamodb_table, status="published", created_at="2026-01-02T00:00:00+00:00"
+    )
+    older_id = _seed_episode(
+        dynamodb_table, status="published", created_at="2026-01-01T00:00:00+00:00"
+    )
+
+    response = http_client.get(
+        "/api/v1/episodes", params={"limit": 50, "sort": "oldest"}
+    )
+    assert response.status_code == 200
+    ids = [item["id"] for item in response.json()["items"]]
+    assert ids.index(older_id) < ids.index(newer_id)
+
+
+def test_get_episodes_supports_longest_sort_and_pagination(http_client, dynamodb_table):
+    short_id = _seed_episode(dynamodb_table, status="published", duration=30)
+    long_id = _seed_episode(dynamodb_table, status="published", duration=300)
+
+    response = http_client.get(
+        "/api/v1/episodes", params={"limit": 1, "sort": "longest"}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["items"][0]["id"] == long_id
+    assert body["cursor"] is not None
+
+    response = http_client.get(
+        "/api/v1/episodes",
+        params={"limit": 1, "sort": "longest", "cursor": body["cursor"]},
+    )
+    assert response.status_code == 200
+    items = [response.json()["items"][0]["id"]]
+    cursor = response.json()["cursor"]
+    while cursor:
+        response = http_client.get(
+            "/api/v1/episodes",
+            params={"limit": 1, "sort": "longest", "cursor": cursor},
+        )
+        assert response.status_code == 200
+        items.extend(item["id"] for item in response.json()["items"])
+        cursor = response.json()["cursor"]
+    assert items.index(long_id) < items.index(short_id)
 
 def test_get_episode_detail_returns_published_episode(http_client, dynamodb_table):
     published_id = _seed_episode(dynamodb_table, status="published")

@@ -102,7 +102,7 @@ def preprocess(
     src_path: str,
     dst_path: str,
     max_duration_seconds: int = DEFAULT_MAX_DURATION_SECONDS,
-) -> None:
+) -> float:
     """Validate duration then transcode `src_path` into `dst_path` in place.
 
     Raises EpisodeTooLongError (and never touches ffmpeg) if the source
@@ -112,6 +112,7 @@ def preprocess(
     if duration > max_duration_seconds:
         raise EpisodeTooLongError(duration, max_duration_seconds)
     transcode_to_compressed_mono(src_path, dst_path)
+    return duration
 
 
 def cleanup(*paths: str) -> None:

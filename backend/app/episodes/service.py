@@ -50,12 +50,14 @@ class EpisodesService:
         return item
 
     async def list_public_episodes(
-        self, limit: int, cursor: str | None
+        self, limit: int, cursor: str | None, sort: str = "newest"
     ) -> PaginatedEpisodesResponse:
         """`GET /episodes` — public, `status=published` only. See
         EpisodesRepository.list_published_page for the pagination/cursor
         design."""
-        items, next_cursor = await self._repository.list_published_page(limit, cursor)
+        items, next_cursor = await self._repository.list_published_page(
+            limit, cursor, sort
+        )
         # Independent per-item presigns — run concurrently rather than
         # paying `limit` sequential round-trips.
         items = list(await asyncio.gather(*(self._with_audio_url(i) for i in items)))

@@ -6,6 +6,8 @@ single path segments after the prefix), or a request for `/episodes/admin`
 would be swallowed by the `{episode_id}` route with `episode_id="admin"`.
 """
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Query
 
 from app.core.auth import require_admin_key
@@ -33,13 +35,15 @@ episodes_router = APIRouter(prefix="/api/v1/episodes", tags=["Episodes"])
 async def get_episodes(
     limit: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     cursor: str | None = Query(default=None),
+    sort: Literal["newest", "oldest", "longest"] = Query(default="newest"),
     service: EpisodesService = Depends(get_episodes_service),
 ) -> PaginatedEpisodesResponse:
     """Public: only `status=published` episodes, newest-created first.
     `cursor` is the opaque token from a previous response's `cursor`
-    field — omit it for the first page."""
+    field — omit it for the first page. `sort` can be `newest`, `oldest`, or
+    `longest`."""
     try:
-        return await service.list_public_episodes(limit, cursor)
+        return await service.list_public_episodes(limit, cursor, sort)
     except Exception as e:
         raise EpisodesRepositoryError() from e
 
