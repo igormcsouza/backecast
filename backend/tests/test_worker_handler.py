@@ -107,7 +107,7 @@ def stub_ffmpeg_and_s3(monkeypatch):
     monkeypatch.setattr(
         worker_handler,
         "_preprocess_audio",
-        lambda bucket, key, episode_id: "/tmp/fake-compressed.m4a",
+        lambda bucket, key, episode_id: ("/tmp/fake-compressed.m4a", 754.3),
     )
     monkeypatch.setattr(
         worker_handler, "_write_transcript", lambda bucket, episode_id, text: None
@@ -149,6 +149,9 @@ def test_transitions_uploading_to_review(fake_table):
     assert item["resources"] == [
         {"label": "Example Resource", "url": "https://example.com/resource"}
     ]
+    # Written during processing->transcribing (see _advance_processing) from
+    # ffprobe's source-file duration, rounded to the nearest second.
+    assert item["duration"] == 754
 
 
 def test_duplicate_delivery_is_a_safe_no_op(fake_table):
@@ -235,7 +238,7 @@ def test_resumes_from_transcribing_by_redoing_ffmpeg(fake_table, monkeypatch):
     monkeypatch.setattr(
         worker_handler,
         "_preprocess_audio",
-        lambda bucket, key, eid: calls.append(eid) or "/tmp/fake-compressed.m4a",
+        lambda bucket, key, eid: calls.append(eid) or ("/tmp/fake-compressed.m4a", 300.0),
     )
 
     result = worker_handler.handler({"Records": [_sqs_record("m1", body)]})

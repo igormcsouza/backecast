@@ -316,10 +316,7 @@ def _advance_processing(
         time.sleep(SABOTAGE_SLEEP_SECONDS)
 
     try:
-        processed = _preprocess_audio(bucket, key, episode_id)
-        compressed_path, duration = (
-            processed if isinstance(processed, tuple) else (processed, None)
-        )
+        compressed_path, duration = _preprocess_audio(bucket, key, episode_id)
     except audio.EpisodeTooLongError as e:
         # Straight to `rejected`, not `failed` — this is an expected,
         # handled outcome (no transcription attempt, no OpenAI cost), not a
@@ -340,7 +337,7 @@ def _advance_processing(
         episode_id,
         EpisodeStatus.PROCESSING,
         EpisodeStatus.TRANSCRIBING,
-        extra_attributes={"duration": round(duration)} if duration is not None else None,
+        extra_attributes={"duration": round(duration)},
     )
     if not moved:
         # Lost a race with a concurrent delivery of the same message — it
@@ -371,8 +368,7 @@ def _advance_transcribing(
         # episode shouldn't get a different terminal status just because it
         # happened to be caught the second time instead of the first.
         try:
-            processed = _preprocess_audio(bucket, key, episode_id)
-            compressed_path = processed[0] if isinstance(processed, tuple) else processed
+            compressed_path, _ = _preprocess_audio(bucket, key, episode_id)
         except audio.EpisodeTooLongError as e:
             _transition(episode_id, EpisodeStatus.TRANSCRIBING, EpisodeStatus.REJECTED)
             logger.warning(
