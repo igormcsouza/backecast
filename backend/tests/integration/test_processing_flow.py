@@ -15,6 +15,7 @@ swapped out. See SESSIONS.md for the real-world cost this pipeline would
 incur with AI_STUB=0 against real infra.
 """
 
+import json
 import time
 
 import pytest
@@ -96,10 +97,11 @@ def test_upload_triggers_pipeline_and_reaches_review_with_ai_metadata(
     # The transcript itself lives in S3, not DynamoDB (see worker/handler.py's
     # docstring for why) — confirm it's really there.
     transcript = s3_client.get_object(
-        Bucket="backecast-media-dev", Key=f"transcripts/{episode_id}.txt"
+        Bucket="backecast-media-dev", Key=f"transcripts/{episode_id}.json"
     )
-    transcript_text = transcript["Body"].read().decode("utf-8")
-    assert "stubbed transcript" in transcript_text.lower()
+    transcript_json = json.loads(transcript["Body"].read().decode("utf-8"))
+    assert "stubbed transcript" in transcript_json["text"].lower()
+    assert transcript_json["segments"]
 
 
 # The `rejected` (over duration cap) path is intentionally not covered here:

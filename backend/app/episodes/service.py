@@ -102,7 +102,7 @@ class EpisodesService:
         item = await self._repository.get(episode_id)
         if item is None or item.get("status") != EpisodeStatus.PUBLISHED.value:
             raise EpisodeNotFoundError()
-        key = f"{self._settings.transcript_key_prefix}{episode_id}.txt"
+        key = f"{self._settings.transcript_key_prefix}{episode_id}.json"
         url = await create_presigned_get(
             bucket=self._settings.media_bucket_name, key=key
         )
@@ -115,7 +115,7 @@ class EpisodesService:
         item = await self._repository.get(episode_id)
         if item is None:
             raise EpisodeNotFoundError()
-        key = f"{self._settings.transcript_key_prefix}{episode_id}.txt"
+        key = f"{self._settings.transcript_key_prefix}{episode_id}.json"
         url = await create_presigned_get(
             bucket=self._settings.media_bucket_name, key=key
         )
