@@ -106,7 +106,7 @@ function EpisodeBody({ episode }: { episode: Episode }) {
             {episode.title}
           </h1>
           <p className="mt-1 text-xs text-text-muted">
-            {formatDuration(episode.duration)} · Released {formatLongDate(episode.release_date)}
+            {episode.duration > 0 && `${formatDuration(episode.duration)} · `}Released {formatLongDate(episode.release_date)}
           </p>
           <p className="mt-3 whitespace-pre-line text-sm text-text-muted">
             {episode.description}
@@ -284,7 +284,7 @@ function MoreEpisodes({ excludeId }: { excludeId: string }) {
                   {episode.title}
                 </span>
                 <span className="block text-xs text-text-muted">
-                  {formatDuration(episode.duration)}
+                  {episode.duration > 0 ? formatDuration(episode.duration) : ""}
                 </span>
               </span>
               <ChevronLeft size={16} className="rotate-180 shrink-0 text-text-muted" />

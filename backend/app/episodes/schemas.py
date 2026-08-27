@@ -2,7 +2,8 @@
 
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, HttpUrl
+from typing import Any
+from pydantic import BaseModel, ConfigDict, HttpUrl, model_validator
 
 
 class EpisodeStatus(str, Enum):
@@ -80,6 +81,14 @@ class GetEpisodeSchema(BaseModel):
     resources: list[Resource] = []
     created_at: str
     updated_at: str
+
+    @model_validator(mode="before")
+    @classmethod
+    def backfill_missing_fields(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if not data.get("release_date") and data.get("status") == EpisodeStatus.PUBLISHED.value:
+                data["release_date"] = data.get("updated_at") or data.get("created_at") or ""
+        return data
 
 
 class CreateEpisodeRequest(BaseModel):

@@ -67,7 +67,7 @@ export function EpisodeGridCard({ episode }: { episode: Episode }) {
         <h3 className="line-clamp-1 text-sm font-semibold text-text">{episode.title}</h3>
         <p className="line-clamp-2 text-xs text-text-muted">{episode.description}</p>
         <p className="mt-auto pt-2 text-[11px] text-text-muted">
-          {formatDuration(episode.duration)} · {formatShortDate(episode.release_date)}
+          {episode.duration > 0 && `${formatDuration(episode.duration)} · `}{formatShortDate(episode.release_date)}
         </p>
       </div>
     </div>
@@ -116,7 +116,7 @@ export function LatestEpisodeHero({ episode }: { episode: Episode }) {
             {showPause ? "Playing" : "Play"}
           </button>
           <span className="text-xs text-text-muted">
-            {formatDuration(episode.duration)} · {formatShortDate(episode.release_date)}
+            {episode.duration > 0 && `${formatDuration(episode.duration)} · `}{formatShortDate(episode.release_date)}
           </span>
         </div>
       </div>
