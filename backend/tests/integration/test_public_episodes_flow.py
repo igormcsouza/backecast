@@ -128,13 +128,8 @@ def test_get_episodes_supports_longest_sort_and_pagination(http_client, dynamodb
     assert body["items"][0]["id"] == long_id
     assert body["cursor"] is not None
 
-    response = http_client.get(
-        "/api/v1/episodes",
-        params={"limit": 1, "sort": "longest", "cursor": body["cursor"]},
-    )
-    assert response.status_code == 200
-    items = [response.json()["items"][0]["id"]]
-    cursor = response.json()["cursor"]
+    items = [body["items"][0]["id"]]
+    cursor = body["cursor"]
     while cursor:
         response = http_client.get(
             "/api/v1/episodes",
