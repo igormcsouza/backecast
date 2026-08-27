@@ -92,24 +92,27 @@ def backfill(table_name: str, bucket: str, dry_run: bool) -> None:
             new_duration = round(audio.probe_duration_seconds(tmp.name))
 
         print(f"{episode_id}: duration {old_duration}s -> {new_duration}s")
+        updated += 1
         if dry_run:
             continue
 
         # Conditional on both status and the old duration value still
         # holding, so a concurrent write (e.g. the episode getting
         # reprocessed) can't be silently clobbered by this one-off script.
+        # `duration` is a DynamoDB reserved keyword, so it needs the same
+        # ExpressionAttributeNames placeholder treatment as `#status` --
+        # can't be interpolated directly into the expression strings.
         table.update_item(
             Key={"PK": item["PK"], "SK": item["SK"]},
-            UpdateExpression="SET duration = :new",
-            ConditionExpression="#status = :status AND duration = :old",
-            ExpressionAttributeNames={"#status": "status"},
+            UpdateExpression="SET #duration = :new",
+            ConditionExpression="#status = :status AND #duration = :old",
+            ExpressionAttributeNames={"#status": "status", "#duration": "duration"},
             ExpressionAttributeValues={
                 ":new": new_duration,
                 ":status": item["status"],
                 ":old": old_duration,
             },
         )
-        updated += 1
 
     verb = "Would update" if dry_run else "Updated"
     print(f"{verb} {updated}/{len(candidates)} episode(s).")
