@@ -138,9 +138,13 @@ class EpisodesRepository(RepositoryAbstract):
         return item
 
     async def update(
-        self, episode_id: str, fields: dict, *, expected_status: str | None = None
+        self,
+        episode_id: str,
+        fields: dict,
+        *,
+        expected_statuses: tuple[str, ...] | None = None,
     ) -> dict:
-        """Partial update (the `PATCH /episodes/{id}` review-edit path).
+        """Partial update (the `PATCH /episodes/{id}` metadata-edit path).
 
         Builds a `SET` expression from whatever `fields` the caller passes
         via placeholders (`#f0`, `:v0`, ...) rather than interpolating
@@ -150,13 +154,12 @@ class EpisodesRepository(RepositoryAbstract):
         Always stamps `updated_at`, mirroring every other write path in
         this table.
 
-        `expected_status`, when given, adds the same conditional-write
+        `expected_statuses`, when given, adds the same conditional-write
         guard `publish()` uses: without it, a caller-side "is this episode
-        still `review`?" check and this write are two separate round-trips,
-        leaving a race where the status changes in between (e.g. a
-        concurrent Publish) and this update silently overwrites metadata on
-        an episode no longer in the editable state. The condition makes
-        that race fail loudly instead.
+        still editable?" check and this write are two separate round-trips,
+        leaving a race where the status changes in between and this update
+        silently overwrites metadata on an in-flight episode. The condition
+        makes that race fail loudly instead.
         """
         now = datetime.now(UTC).isoformat()
         set_clauses = ["updated_at = :now"]
@@ -175,12 +178,17 @@ class EpisodesRepository(RepositoryAbstract):
             "ExpressionAttributeValues": values,
             "ReturnValues": "ALL_NEW",
         }
-        if expected_status is not None:
-            kwargs["ConditionExpression"] = "#status = :expected_status"
+        if expected_statuses is not None:
+            status_placeholders = [
+                f":expected_status{i}" for i in range(len(expected_statuses))
+            ]
+            kwargs["ConditionExpression"] = (
+                "#status IN (" + ", ".join(status_placeholders) + ")"
+            )
             kwargs["ExpressionAttributeNames"] = {**names, "#status": "status"}
             kwargs["ExpressionAttributeValues"] = {
                 **values,
-                ":expected_status": expected_status,
+                **dict(zip(status_placeholders, expected_statuses, strict=True)),
             }
 
         try:

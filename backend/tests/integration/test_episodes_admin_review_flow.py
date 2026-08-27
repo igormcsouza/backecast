@@ -108,6 +108,27 @@ def test_patch_episode_updates_metadata_when_in_review(
     assert item["resources"] == [{"label": "Docs", "url": "https://example.com/docs"}]
 
 
+def test_patch_episode_updates_metadata_when_published(
+    http_client, admin_headers, dynamodb_table
+):
+    episode_id = _seed_episode(dynamodb_table, status="published")
+
+    response = http_client.patch(
+        f"/api/v1/episodes/{episode_id}",
+        headers=admin_headers,
+        json={"title": "Corrected Published Title"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["title"] == "Corrected Published Title"
+    assert response.json()["status"] == "published"
+
+    item = dynamodb_table.get_item(
+        Key={"PK": f"EPISODE#{episode_id}", "SK": f"EPISODE#{episode_id}"}
+    )["Item"]
+    assert item["title"] == "Corrected Published Title"
+
+
 def test_patch_episode_partial_update_only_touches_given_fields(
     http_client, admin_headers, dynamodb_table
 ):
@@ -124,7 +145,7 @@ def test_patch_episode_partial_update_only_touches_given_fields(
     assert body["description"] == "Original description."
 
 
-def test_patch_episode_rejected_when_not_in_review(
+def test_patch_episode_rejected_while_pipeline_is_in_flight(
     http_client, admin_headers, dynamodb_table
 ):
     episode_id = _seed_episode(dynamodb_table, status="uploading")

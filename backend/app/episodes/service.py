@@ -27,6 +27,7 @@ from app.shared.s3 import create_presigned_get, create_presigned_post
 
 DEFAULT_PAGE_SIZE = 10
 MAX_PAGE_SIZE = 50
+EDITABLE_STATUSES = (EpisodeStatus.REVIEW.value, EpisodeStatus.PUBLISHED.value)
 
 
 class EpisodesService:
@@ -124,13 +125,16 @@ class EpisodesService:
     async def update_episode(
         self, episode_id: str, payload: UpdateEpisodeRequest
     ) -> GetEpisodeSchema:
-        """`PATCH /episodes/{id}` — admin-only, review-edit metadata.
-        Only allowed while `status=review`: editing already-published (or
-        still in-flight) episodes isn't a flow this MVP supports."""
+        """`PATCH /episodes/{id}` — admin-only metadata edit.
+
+        Review and published episodes are stable enough for an admin's
+        corrections. Pipeline-owned in-flight statuses stay immutable so a
+        manual save cannot race the worker's metadata write.
+        """
         item = await self._repository.get(episode_id)
         if item is None:
             raise EpisodeNotFoundError()
-        if item.get("status") != EpisodeStatus.REVIEW.value:
+        if item.get("status") not in EDITABLE_STATUSES:
             raise EpisodeNotEditableError()
 
         fields: dict = {}
@@ -147,11 +151,11 @@ class EpisodesService:
             item = await self._with_audio_url(item)
             return GetEpisodeSchema.model_validate(item)
 
-        # `expected_status` closes the check-then-act race between the read
+        # `expected_statuses` closes the check-then-act race between the read
         # above and this write: the repository's conditional write is the
         # real guard, this early check is just a friendlier fast path.
         updated = await self._repository.update(
-            episode_id, fields, expected_status=EpisodeStatus.REVIEW.value
+            episode_id, fields, expected_statuses=EDITABLE_STATUSES
         )
         updated = await self._with_audio_url(updated)
         return GetEpisodeSchema.model_validate(updated)

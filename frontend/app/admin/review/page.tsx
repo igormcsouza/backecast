@@ -138,6 +138,7 @@ function ReviewEditor() {
   }
 
   const isReview = episode.status === "review";
+  const isEditable = isReview || episode.status === "published";
 
   return (
     <div className="min-h-screen">
@@ -247,11 +248,11 @@ function ReviewEditor() {
           <button
             type="button"
             onClick={handleSave}
-            disabled={saving || !isReview}
+            disabled={saving || !isEditable}
             title={
-              isReview
+              isEditable
                 ? undefined
-                : "Editing a published (or still-processing) episode isn't supported by the API yet — see backecast#10"
+                : "Editing is unavailable while this episode is still processing."
             }
             className="rounded-lg border border-border-strong px-4 py-2 text-sm font-medium text-text transition hover:border-accent disabled:cursor-not-allowed disabled:opacity-50"
           >
