@@ -11,9 +11,13 @@ since that half genuinely needs a real in-flight episode to test against.
 
 from __future__ import annotations
 
+import uuid
+
 from playwright.sync_api import Page
 
+from pages.admin_page import AdminPage
 from pages.public_page import PublicEpisodePage, PublicHomePage
+from pages.review_page import ReviewPage
 
 
 def test_public_home_page_loads(page: Page, base_url: str) -> None:
@@ -30,3 +34,47 @@ def test_unknown_episode_id_is_not_found(page: Page, base_url: str) -> None:
     detail = PublicEpisodePage(page)
     detail.goto("00000000-0000-0000-0000-000000000000")
     detail.expect_not_found()
+
+
+def _publish_episode(
+    page: Page, admin_credentials: tuple[str, str], tiny_audio_file: dict, title: str
+) -> None:
+    """Runs a real episode through upload -> review -> publish so it lands
+    on the public page, per test_episode_flow.py's pattern."""
+    admin = AdminPage(page)
+    admin.goto()
+    admin.login(*admin_credentials)
+    admin.expect_signed_in()
+
+    episode_id = admin.upload(tiny_audio_file)
+    admin.wait_for_review_ready(episode_id)
+    admin.open_review(episode_id)
+
+    review = ReviewPage(page)
+    review.set_title(title)
+    review.save()
+    review.publish()
+
+
+def test_search_filters_public_episode_list(
+    page: Page, base_url: str, admin_credentials: tuple[str, str], tiny_audio_file: dict
+) -> None:
+    unique_suffix = uuid.uuid4().hex[:8]
+    alpha_title = f"Searchable {unique_suffix} Alpha"
+    bravo_title = f"Searchable {unique_suffix} Bravo"
+
+    _publish_episode(page, admin_credentials, tiny_audio_file, alpha_title)
+    _publish_episode(page, admin_credentials, tiny_audio_file, bravo_title)
+
+    home = PublicHomePage(page)
+    home.goto()
+    home.expect_episode_visible(alpha_title)
+    home.expect_episode_visible(bravo_title)
+
+    home.search("Alpha")
+    home.expect_episode_visible(alpha_title)
+    home.expect_episode_not_present(bravo_title)
+
+    home.search("")
+    home.expect_episode_visible(alpha_title)
+    home.expect_episode_visible(bravo_title)

@@ -50,13 +50,17 @@ class EpisodesService:
         return item
 
     async def list_public_episodes(
-        self, limit: int, cursor: str | None, sort: str = "newest"
+        self,
+        limit: int,
+        cursor: str | None,
+        sort: str = "newest",
+        q: str | None = None,
     ) -> PaginatedEpisodesResponse:
         """`GET /episodes` — public, `status=published` only. See
         EpisodesRepository.list_published_page for the pagination/cursor
         design."""
         items, next_cursor = await self._repository.list_published_page(
-            limit, cursor, sort
+            limit, cursor, sort, q
         )
         # Independent per-item presigns — run concurrently rather than
         # paying `limit` sequential round-trips.

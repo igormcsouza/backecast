@@ -35,6 +35,12 @@ class PublicHomePage:
     def open_episode(self, title: str) -> None:
         self.episode_link(title).click()
 
+    def search_input(self):
+        return self.page.get_by_placeholder("Search episodes…")
+
+    def search(self, term: str) -> None:
+        self.search_input().fill(term)
+
 
 class PublicEpisodePage:
     def __init__(self, page: Page) -> None:

@@ -36,14 +36,16 @@ async def get_episodes(
     limit: int = Query(default=DEFAULT_PAGE_SIZE, ge=1, le=MAX_PAGE_SIZE),
     cursor: str | None = Query(default=None),
     sort: Literal["newest", "oldest", "longest"] = Query(default="newest"),
+    q: str | None = Query(default=None, description="Filter by title/description substring (case-insensitive)"),
     service: EpisodesService = Depends(get_episodes_service),
 ) -> PaginatedEpisodesResponse:
     """Public: only `status=published` episodes, newest-created first.
     `cursor` is the opaque token from a previous response's `cursor`
     field — omit it for the first page. `sort` can be `newest`, `oldest`, or
-    `longest`."""
+    `longest`. `q`, if given, filters to episodes whose title or description
+    contains it (case-insensitive substring match)."""
     try:
-        return await service.list_public_episodes(limit, cursor, sort)
+        return await service.list_public_episodes(limit, cursor, sort, q)
     except Exception as e:
         raise EpisodesRepositoryError() from e
 
