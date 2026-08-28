@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import uuid
 
-from playwright.sync_api import Page
+from playwright.sync_api import Page, expect
 
 from pages.admin_page import AdminPage
 from pages.public_page import PublicEpisodePage, PublicHomePage
@@ -25,8 +25,6 @@ def test_public_home_page_loads(page: Page, base_url: str) -> None:
     home.goto()
     # Doesn't assert on episode content (that depends on what else has
     # published in this run) — just that the shell renders without error.
-    from playwright.sync_api import expect
-
     expect(page.get_by_role("heading", name="Episodes")).to_be_visible()
 
 
@@ -51,6 +49,13 @@ def _publish_episode(
     admin.open_review(episode_id)
 
     review = ReviewPage(page)
+    # `open_review`'s click triggers client-side navigation; a bare `.fill()`
+    # right after can catch the review page mid-transition and hit the
+    # *admin* page's file input instead (a hard, non-retryable "Input of
+    # type file cannot be filled" error, not a friendly timeout — see
+    # test_episode_flow.py's equivalent wait). Waiting on the audio player,
+    # which only ever renders on the loaded review page, synchronizes first.
+    expect(review.audio_player()).to_have_count(1)
     review.set_title(title)
     review.save()
     review.publish()
