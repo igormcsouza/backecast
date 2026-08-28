@@ -11,6 +11,7 @@ since that half genuinely needs a real in-flight episode to test against.
 
 from __future__ import annotations
 
+import re
 import uuid
 
 from playwright.sync_api import Page, expect
@@ -53,9 +54,10 @@ def _publish_episode(
     # right after can catch the review page mid-transition and hit the
     # *admin* page's file input instead (a hard, non-retryable "Input of
     # type file cannot be filled" error, not a friendly timeout — see
-    # test_episode_flow.py's equivalent wait). Waiting on the audio player,
-    # which only ever renders on the loaded review page, synchronizes first.
-    expect(review.audio_player()).to_have_count(1)
+    # test_episode_flow.py's equivalent wait). `audio_player()` doesn't prove
+    # navigation happened (MiniPlayer mounts a persistent <audio> tag on
+    # every route), so wait on the URL itself instead.
+    expect(page).to_have_url(re.compile(r"/admin/review\?id="))
     review.set_title(title)
     review.save()
     review.publish()
