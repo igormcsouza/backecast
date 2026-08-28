@@ -2,10 +2,10 @@
 # Every push to `main` (i.e. every merge) deploys whatever actually
 # changed, automatically. There is no separate `dev` stage anymore: it
 # used to be a permanent always-on environment sitting alongside `prod`,
-# duplicating its cost, while `deploy-preview.yml`'s ephemeral `pr-<number>`
-# stacks already cover pre-merge testing. `main` merging straight to `prod`
-# means PR review + the PR preview stack *are* the pre-production gate —
-# there's no second "deploy to dev, poke it, then promote" step anymore.
+# duplicating its cost. `main` merging straight to `prod` means PR review +
+# ci.yml's `deploy-check` job (`cdk diff` against `prod`, read-only) + the
+# E2E suite *are* the pre-production gate — there's no second "deploy to
+# dev, poke it, then promote" step anymore.
 #
 # A few ideas worth reading before touching this file:
 #

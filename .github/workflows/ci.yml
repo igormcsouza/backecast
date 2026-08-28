@@ -74,6 +74,40 @@ jobs:
       - run: uv run cdk synth
       - run: uv run pytest
 
+  # Proves the CDK app would actually deploy to real AWS — without
+  # deploying anything. `cdk diff` against the already-live `prod` stacks
+  # is read-only (DescribeStacks/GetTemplate + a change-set computation on
+  # AWS's side, no ChangeSet execution) so it catches template synth
+  # errors, drift, and IAM/permission problems the same way a real `cdk
+  # deploy` would, at zero cost and with no new resources created. This
+  # replaces the old ephemeral `pr-<number>` preview stack (see #19) — that
+  # approach actually created a full parallel environment per PR, which
+  # stopped being worth its AWS attack surface/cost once the frontend was
+  # no longer deployed there for testing (e2e against LocalStack already
+  # covers the "does it work" question; this job only answers "would it
+  # deploy").
+  #
+  # PR-only (not `push`): needs live AWS credentials, and there's nothing
+  # to diff against on a `main` push that deploy.yml doesn't already do
+  # for real right after.
+  deploy-check:
+    needs: changes
+    if: github.event_name == 'pull_request' && needs.changes.outputs.infra == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-cdk-deploy
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ vars.AWS_DEPLOY_REGION || 'sa-east-1' }}
+      - run: >
+          uv run cdk diff
+          "Backecast-prod-Data" "Backecast-prod-Auth" "Backecast-prod-Api" "Backecast-prod-Pipeline"
+
   frontend:
     needs: changes
     if: needs.changes.outputs.frontend == 'true'
