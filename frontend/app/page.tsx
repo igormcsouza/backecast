@@ -16,10 +16,20 @@ export default function HomePage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sort, setSort] = useState<SortOption>("newest");
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+
+  // Debounce the raw input so every keystroke doesn't fire a request —
+  // the fetch effect below depends on `debouncedSearch`, not `search`.
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
 
   useEffect(() => {
     let cancelled = false;
-    listPublicEpisodes(PAGE_SIZE, null, sort)
+    setLoading(true);
+    listPublicEpisodes(PAGE_SIZE, null, sort, debouncedSearch)
       .then((page) => {
         if (cancelled) return;
         setEpisodes(page.items);
@@ -36,23 +46,26 @@ export default function HomePage() {
     return () => {
       cancelled = true;
     };
-  }, [sort]);
+  }, [sort, debouncedSearch]);
 
   function changeSort(nextSort: SortOption) {
     if (nextSort !== sort) {
       setEpisodes([]);
       setCursor(null);
       setError(null);
-      setLoading(true);
       setSort(nextSort);
     }
+  }
+
+  function changeSearch(nextSearch: string) {
+    setSearch(nextSearch);
   }
 
   async function loadMore() {
     if (!cursor) return;
     setLoadingMore(true);
     try {
-      const page = await listPublicEpisodes(PAGE_SIZE, cursor, sort);
+      const page = await listPublicEpisodes(PAGE_SIZE, cursor, sort, debouncedSearch);
       setEpisodes((prev) => [...prev, ...page.items]);
       setCursor(page.cursor);
     } catch (err) {
@@ -69,14 +82,16 @@ export default function HomePage() {
 
   return (
     <>
-      <PublicHeader />
+      <PublicHeader searchValue={search} onSearchChange={changeSearch} />
       <div className="mx-auto flex max-w-5xl flex-col gap-8 px-4 py-8 pb-28">
         {loading && <p className="text-sm text-text-muted">Loading episodes…</p>}
         {error && <p className="text-sm text-danger">{error}</p>}
 
         {!loading && !error && episodes.length === 0 && !cursor && (
           <p className="text-sm text-text-muted">
-            No episodes published yet — check back soon.
+            {debouncedSearch
+              ? "No episodes match your search."
+              : "No episodes published yet — check back soon."}
           </p>
         )}
 

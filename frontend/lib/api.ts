@@ -66,10 +66,12 @@ async function request<T>(
 export function listPublicEpisodes(
   limit = 10,
   cursor?: string | null,
-  sort: "newest" | "oldest" | "longest" = "newest"
+  sort: "newest" | "oldest" | "longest" = "newest",
+  q?: string
 ): Promise<PaginatedEpisodes> {
   const params = new URLSearchParams({ limit: String(limit), sort });
   if (cursor) params.set("cursor", cursor);
+  if (q) params.set("q", q);
   return request<PaginatedEpisodes>(`/episodes?${params.toString()}`);
 }
 

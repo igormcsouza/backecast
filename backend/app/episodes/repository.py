@@ -42,15 +42,28 @@ def _decode_cursor(cursor: str) -> dict:
     return json.loads(base64.urlsafe_b64decode(cursor.encode()).decode())
 
 
-def _encode_sort_cursor(offset: int) -> str:
-    return _encode_cursor({"sort": "longest", "offset": offset})
+def _encode_page_cursor(sort: str, offset: int, q: str | None) -> str:
+    return _encode_cursor({"sort": sort, "offset": offset, "q": q})
 
 
-def _decode_sort_cursor(cursor: str) -> int:
+def _decode_page_offset(cursor: str, sort: str, q: str | None) -> int:
+    """Recover the offset from a Python-side-paginated cursor (`longest`
+    sort, or any sort combined with `q`). A cursor whose `sort`/`q` doesn't
+    match the current request — the client changed sort or search mid-walk
+    — is treated as a fresh first page rather than an error, matching how
+    permissive the rest of this repository's cursor handling already is."""
     decoded = _decode_cursor(cursor)
-    if decoded.get("sort") != "longest" or not isinstance(decoded.get("offset"), int):
-        raise ValueError("cursor does not belong to the longest sort")
-    return decoded["offset"]
+    if decoded.get("sort") != sort or decoded.get("q") != q:
+        return 0
+    offset = decoded.get("offset")
+    return offset if isinstance(offset, int) else 0
+
+
+def _matches_query(item: dict, q_lower: str) -> bool:
+    return (
+        q_lower in item.get("title", "").lower()
+        or q_lower in item.get("description", "").lower()
+    )
 
 
 class EpisodesRepository(RepositoryAbstract):
@@ -84,7 +97,7 @@ class EpisodesRepository(RepositoryAbstract):
         return response["Items"]
 
     async def list_published_page(
-        self, limit: int, cursor: str | None, sort: str = "newest"
+        self, limit: int, cursor: str | None, sort: str = "newest", q: str | None = None
     ) -> tuple[list[dict], str | None]:
         """One page of `status=published` episodes, newest-created first.
 
@@ -119,10 +132,14 @@ class EpisodesRepository(RepositoryAbstract):
         if cursor:
             kwargs["ExclusiveStartKey"] = _decode_cursor(cursor)
 
-        if sort == "longest":
-            # Duration is not a key in the existing GSI. Read the published
-            # catalog, then sort before slicing; sorting one page would make
-            # cursor pagination incorrect.
+        if sort == "longest" or q:
+            # Neither duration (for `longest`) nor free-text search (`q`,
+            # DynamoDB has no case-insensitive `contains`) can be expressed
+            # as a single-page native query. Read the whole published
+            # catalog, filter/sort in Python, then slice — sorting or
+            # filtering one raw page at a time would make cursor
+            # pagination incorrect (a match on page 2 could rank before one
+            # already returned on page 1).
             items: list[dict] = []
             last_key = None
             while True:
@@ -137,18 +154,31 @@ class EpisodesRepository(RepositoryAbstract):
                 last_key = response.get("LastEvaluatedKey")
                 if not last_key:
                     break
-            items.sort(
-                key=lambda item: (
-                    item.get("duration", 0),
-                    item.get("created_at", ""),
-                ),
-                reverse=True,
-            )
-            offset = _decode_sort_cursor(cursor) if cursor else 0
+
+            if q:
+                q_lower = q.lower()
+                items = [item for item in items if _matches_query(item, q_lower)]
+
+            if sort == "longest":
+                items.sort(
+                    key=lambda item: (
+                        item.get("duration", 0),
+                        item.get("created_at", ""),
+                    ),
+                    reverse=True,
+                )
+            elif sort == "oldest":
+                items.sort(key=lambda item: item.get("created_at", ""))
+            else:
+                items.sort(key=lambda item: item.get("created_at", ""), reverse=True)
+
+            offset = _decode_page_offset(cursor, sort, q) if cursor else 0
             page = items[offset : offset + limit]
             next_offset = offset + len(page)
             next_cursor = (
-                _encode_sort_cursor(next_offset) if next_offset < len(items) else None
+                _encode_page_cursor(sort, next_offset, q)
+                if next_offset < len(items)
+                else None
             )
             return page, next_cursor
 

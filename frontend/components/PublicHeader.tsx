@@ -3,12 +3,20 @@
 import { Mic, Search } from "lucide-react";
 import Link from "next/link";
 
-// The search input has no backend behind it yet — `GET /episodes` has no
-// full-text query param (see backend/app/episodes/router.py). Left visible
-// per the design guide but disabled with an explanatory title, rather than
-// removed, so the redesign doesn't silently drop a documented affordance;
-// tracked to wire up once the backend search endpoint exists.
-export default function PublicHeader() {
+interface PublicHeaderProps {
+  // Optional: only the home page (app/page.tsx) wires these up to actually
+  // filter the list. Pages that render PublicHeader without them (e.g.
+  // app/episode/page.tsx) get the pre-#6 disabled/"coming soon" input back,
+  // rather than a search box that silently does nothing when typed into.
+  searchValue?: string;
+  onSearchChange?: (value: string) => void;
+}
+
+export default function PublicHeader({
+  searchValue = "",
+  onSearchChange,
+}: PublicHeaderProps) {
+  const searchEnabled = onSearchChange !== undefined;
   return (
     <header className="sticky top-0 z-30 border-b border-border bg-bg/95 backdrop-blur">
       <div className="mx-auto flex max-w-5xl items-center gap-4 px-4 py-3">
@@ -28,11 +36,23 @@ export default function PublicHeader() {
           />
           <input
             type="search"
-            disabled
+            value={searchValue}
+            onChange={
+              searchEnabled
+                ? (event) => onSearchChange!(event.target.value)
+                : undefined
+            }
+            disabled={!searchEnabled}
             placeholder="Search episodes…"
-            title="Episode search is coming soon"
-            aria-label="Search episodes (coming soon)"
-            className="w-full cursor-not-allowed rounded-full border border-border bg-surface py-1.5 pl-9 pr-3 text-sm text-text-muted placeholder:text-text-muted focus:outline-none"
+            title={searchEnabled ? undefined : "Episode search is coming soon"}
+            aria-label={
+              searchEnabled ? "Search episodes" : "Search episodes (coming soon)"
+            }
+            className={
+              searchEnabled
+                ? "w-full rounded-full border border-border bg-surface py-1.5 pl-9 pr-3 text-sm text-text placeholder:text-text-muted focus:outline-none focus:border-accent"
+                : "w-full cursor-not-allowed rounded-full border border-border bg-surface py-1.5 pl-9 pr-3 text-sm text-text-muted placeholder:text-text-muted focus:outline-none"
+            }
           />
         </div>
 
