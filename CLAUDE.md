@@ -101,12 +101,12 @@ infra/
 └── tests/                  # CDK assertions tests (Template.from_stack)
 ```
 
-- Stages: `prod` (the one, always-on public environment — auto-deploys on
-  every push to `main`) and `pr-<number>` (ephemeral preview, deployed
-  while its PR is open, destroyed on close — that's the pre-merge testing
-  step; there is no separate `dev`). Stage config lives in
-  `infra/cdk.json`'s `context` block; `pr-*` stages fall back to `prod`'s
-  region.
+- One real stage: `prod` (the always-on public environment — auto-deploys
+  on every push to `main`; there is no separate `dev`). Stage config lives
+  in `infra/cdk.json`'s `context` block. No ephemeral per-PR preview
+  stacks anymore (see #19) — pre-merge, CI's `deploy-check` job runs `cdk
+  diff` against `prod` (read-only, proves the app would deploy without
+  deploying anything), and the E2E suite covers functional testing.
 - Environment config via `cdk.json` context — no hardcoded ARNs.
 - Removal policy: `pr-*` stages are `DESTROY` (must tear down cleanly,
   unattended); `prod` is `RETAIN` (never lose real data to an accidental

@@ -11,26 +11,15 @@ app = cdk.App()
 stage = app.node.try_get_context("stage") or "prod"
 ctx = app.node.try_get_context(stage)
 
-# Only two real, always-there stages: `prod` (the live public site) and
-# `pr-<number>` (one per open PR — see .github/workflows/deploy-preview.yml).
-# There is no `dev` anymore — it was a separate always-on stage that just
-# duplicated `prod`'s cost and drifted from what PR previews already cover
-# as the actual pre-merge testing step. `pr-<number>` can't have a
-# hand-authored entry in cdk.json's `context` block the way `prod` does —
-# nobody edits this file every time a PR is opened — so it falls back to
-# `prod`'s region instead: same promotion mechanism (`-c stage=...` selects
-# a stack-name prefix and a region), just without requiring a static
-# context entry per PR number. Anything else unrecognized is a real
-# mistake (a typo'd `-c stage=`), not a case to silently paper over.
+# Only one real stage: `prod` (the live public site). There is no `dev`
+# anymore — it was a separate always-on stage that just duplicated `prod`'s
+# cost. Ephemeral per-PR preview stacks were dropped too (see #19) — CI's
+# `deploy-check` job (`cdk diff` against `prod`) now covers "would this
+# deploy" without creating a parallel environment per PR.
 if ctx is None:
-    if stage.startswith("pr-"):
-        ctx = {"region": app.node.try_get_context("prod")["region"]}
-    else:
-        raise ValueError(
-            f"Unknown stage {stage!r} — add it to infra/cdk.json's `context` "
-            "block (like `prod`), or use a `pr-<number>` stage name for an "
-            "ephemeral PR preview environment."
-        )
+    raise ValueError(
+        f"Unknown stage {stage!r} — add it to infra/cdk.json's `context` block (like `prod`)."
+    )
 
 env = cdk.Environment(account=app.node.try_get_context("account"), region=ctx["region"])
 

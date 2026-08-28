@@ -90,8 +90,8 @@ Streaming: the episode's media_url served straight from the S3 bucket
 | AI | Transcription: OpenAI `gpt-4o-mini-transcribe` (~$0.003/min). Metadata generation: LangChain (`init_chat_model`, swappable provider — default OpenAI) |
 | Data | DynamoDB (single table, on-demand billing), S3 (media) |
 | Async pipeline | S3 event → SQS → Worker Lambda, DLQ with `maxReceiveCount=3` |
-| Infra | CDK in Python, one stack per concern (`Data`, `Auth`, `Api`, `Pipeline`), parameterized by stage (`prod`/`pr-<n>` — no separate `dev`) |
-| CI/CD | GitHub Actions — CI on every PR/push (path-filtered per layer); CD on merge to `main` deploys `prod`, only the layer(s) that changed (backend and/or frontend); ephemeral per-PR preview stacks are the pre-merge testing step |
+| Infra | CDK in Python, one stack per concern (`Data`, `Auth`, `Api`, `Pipeline`), parameterized by stage (`prod` — no separate `dev`) |
+| CI/CD | GitHub Actions — CI on every PR/push (path-filtered per layer), including a read-only `cdk diff` against `prod` to prove infra changes would deploy; CD on merge to `main` deploys `prod`, only the layer(s) that changed (backend and/or frontend) |
 | Local dev | docker-compose: API (`uvicorn --reload`) + worker + LocalStack (S3, SQS, DynamoDB) |
 | Testing | pytest unit + integration (against docker-compose/LocalStack) · CDK assertion tests · Playwright E2E (Python) |
 
@@ -112,10 +112,10 @@ is a repo variable (defaults to `sa-east-1` if unset).
   PR *is* the release. `workflow_dispatch` (Actions tab → CD → Run
   workflow) force-deploys both layers unconditionally, for the rare case a
   path-filter gap left a change undeployed.
-- **PR previews**: `Backecast-pr-<number>-*` stacks, deployed on open/push,
-  destroyed unconditionally on PR close — this is the pre-merge testing
-  step; review the PR preview's API URL (commented on the PR) before
-  merging.
+- **Pre-merge testing**: no ephemeral PR preview environment anymore — CI's
+  `deploy-check` job runs `cdk diff` against `prod` (read-only, catches
+  template/permission problems without deploying anything) and the E2E
+  suite exercises the app for real against docker-compose/LocalStack.
 
 The admin Cognito user is **not** created by CDK — after `AuthStack`
 deploys, create the single admin user in the Cognito console (AWS Console →

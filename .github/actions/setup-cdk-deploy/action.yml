@@ -1,14 +1,13 @@
 name: Set up CDK deploy tooling and AWS credentials
 description: >-
   Shared setup steps for every job that runs `cdk deploy`/`cdk destroy`
-  against real AWS (deploy.yml's deploy-backend, deploy-prod.yml's
-  deploy-backend-prod, deploy-preview.yml's deploy-preview and
-  destroy-preview). Extracted after code review flagged the four jobs
-  duplicating this block verbatim — a future tooling change (CDK version,
-  Node version, install method) now only needs editing once. Does NOT
-  include `actions/checkout`: callers check out different refs (the CI
-  commit, a release tag, the PR head, the PR's base branch), so that step
-  stays in each workflow rather than being hidden behind an input here.
+  against real AWS (deploy.yml's deploy-backend) or read-only against it
+  (ci.yml's deploy-check, which only runs `cdk diff`). Extracted after code
+  review flagged jobs duplicating this block verbatim — a future tooling
+  change (CDK version, Node version, install method) now only needs
+  editing once. Does NOT include `actions/checkout`: callers check out
+  different refs (the CI commit, a release tag), so that step stays in
+  each workflow rather than being hidden behind an input here.
 
   Auth: a static IAM user access key (`backecast-github-actions`, member of
   the same `Projects` IAM group used by Igor's other repos), passed as repo
