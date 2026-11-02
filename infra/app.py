@@ -44,6 +44,11 @@ PipelineStack(
     openai_api_key_param=data_stack.openai_api_key_param,
     llm_api_key_param=data_stack.llm_api_key_param,
     env=env,
+    # Worker Docker image goes to a dedicated, pre-existing ECR repo (created
+    # by hand, with a lifecycle policy) instead of the shared CDK bootstrap one.
+    synthesizer=cdk.DefaultStackSynthesizer(
+        image_assets_repository_name="backecast-assets"
+    ),
 )
 
 app.synth()
