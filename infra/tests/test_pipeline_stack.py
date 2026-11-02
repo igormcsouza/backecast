@@ -16,6 +16,9 @@ def synth_template() -> Template:
         bucket=data_stack.media_bucket,
         openai_api_key_param=data_stack.openai_api_key_param,
         llm_api_key_param=data_stack.llm_api_key_param,
+        synthesizer=cdk.DefaultStackSynthesizer(
+            image_assets_repository_name="backecast-assets"
+        ),
     )
     return Template.from_stack(pipeline_stack)
 
@@ -158,3 +161,16 @@ def test_creates_s3_bucket_notification_to_the_queue():
     # confirms the S3 -> SQS wiring was actually configured, without
     # over-specifying the custom resource's internal shape.
     template.resource_count_is("Custom::S3BucketNotifications", 1)
+
+
+def test_worker_image_comes_from_dedicated_ecr_repo():
+    # Not the shared CDK bootstrap repo — see infra/app.py.
+    template = synth_template()
+    image_uri = template.to_json()["Resources"]
+    uris = [
+        r["Properties"]["Code"]["ImageUri"]
+        for r in image_uri.values()
+        if r["Type"] == "AWS::Lambda::Function"
+        and "ImageUri" in r["Properties"].get("Code", {})
+    ]
+    assert uris and all("/backecast-assets:" in str(u) for u in uris)
