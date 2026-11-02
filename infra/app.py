@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import aws_cdk as cdk
+from aws_cdk import Tags
 
 from stacks.api_stack import ApiStack
 from stacks.auth_stack import AuthStack
@@ -50,5 +51,8 @@ PipelineStack(
         image_assets_repository_name="backecast-assets"
     ),
 )
+
+# Cost allocation tag — splits the AWS bill per project.
+Tags.of(app).add("project", "backecast")
 
 app.synth()
