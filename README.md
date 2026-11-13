@@ -4,7 +4,7 @@ A small podcast platform: upload an episode → an async pipeline transcribes
 it and has an LLM generate a title, short description, and resource links →
 admin reviews/edits → publish → public streaming page.
 
-Live: **https://igormcsouza.github.io/backecast/** (frontend, GitHub Pages) ·
+Live: **https://backecast.igormcsouza.com.br/** (frontend: S3 + CloudFront, on its own domain so the admin token is isolated) ·
 backend API on AWS Lambda + API Gateway (`prod` stage).
 
 ## Architecture
@@ -12,7 +12,7 @@ backend API on AWS Lambda + API Gateway (`prod` stage).
 ```
                                    ┌─────────────────────────┐
                                    │   Next.js static export │
-                                   │      (GitHub Pages)     │
+                                   │      (S3 + CloudFront)  │
                                    └────────────┬────────────┘
                                                 │ HTTPS
                                                 ▼
@@ -68,13 +68,12 @@ Streaming: the episode's media_url served straight from the S3 bucket
 ```
 
 **If something's broken, use this diagram to localize it:**
-- Public page won't load at all → GitHub Pages / `deploy-frontend` job
+- Public page won't load at all → CloudFront / S3 (`Backecast-prod-Web`) / `deploy-frontend` job
   (`.github/workflows/deploy.yml`).
 - Public page loads but no episodes / stale API data → API Lambda,
   API Gateway, or DynamoDB — check `deploy-backend`'s CloudWatch logs.
-- Admin login fails → Cognito User Pool / User Pool Client
-  (`infra/stacks/auth_stack.py`) or `frontend/lib/auth.ts`'s
-  `InitiateAuth` call.
+- Admin login fails → Citadel (the `citadel` repo: pool, this app's client in
+  `config/apps.json`) or `frontend/lib/auth.ts`.
 - Upload succeeds but episode never leaves `processing`/`transcribing` →
   worker Lambda, SQS queue, or its DLQ (`infra/stacks/pipeline_stack.py`) —
   check the DLQ for stuck messages first.
@@ -84,9 +83,9 @@ Streaming: the episode's media_url served straight from the S3 bucket
 
 | Layer | Choice |
 |---|---|
-| Frontend | Next.js (static export), TypeScript, Tailwind — hosted on GitHub Pages |
+| Frontend | Next.js (static export), TypeScript, Tailwind — hosted on S3 + CloudFront |
 | Backend | Python 3.12, FastAPI, Mangum, **uv** for dependency management |
-| Admin auth | AWS Cognito User Pool (username + password; no self-registration — admin user created by hand in the Cognito console) |
+| Admin auth | Citadel SSO (Cognito, code flow + PKCE in the browser; passkey or password; no self-registration) |
 | AI | Transcription: OpenAI `gpt-4o-mini-transcribe` (~$0.003/min). Metadata generation: LangChain (`init_chat_model`, swappable provider — default OpenAI) |
 | Data | DynamoDB (single table, on-demand billing), S3 (media) |
 | Async pipeline | S3 event → SQS → Worker Lambda, DLQ with `maxReceiveCount=3` |
@@ -117,25 +116,10 @@ is a repo variable (defaults to `sa-east-1` if unset).
   template/permission problems without deploying anything) and the E2E
   suite exercises the app for real against docker-compose/LocalStack.
 
-The admin Cognito user is **not** created by CDK — after `AuthStack`
-deploys, create the single admin user in the Cognito console (AWS Console →
-Cognito → the `backecast-<stage>-admin` pool → Users → Create user).
-
-The console's "Create user" flow only ever sets a *temporary* password —
-there's no UI checkbox for permanent. Logging in with it returns Cognito's
-`NEW_PASSWORD_REQUIRED` challenge instead of tokens, which the frontend's
-login form doesn't handle (shows "unexpected response from Cognito").
-Finish setup with the CLI to set a real, permanent password before the
-first login:
-
-```bash
-aws cognito-idp admin-set-user-password \
-  --user-pool-id <UserPoolId from the Auth stack's outputs> \
-  --username <the admin username> \
-  --password "<a real password>" \
-  --permanent \
-  --region sa-east-1
-```
+Admin sign-in is **Citadel**, not part of this repo. The pool id and this app's
+client id (`ClientId-backecast` output of Citadel's stack) are in `infra/cdk.json`
+(`citadel`) and `.github/workflows/deploy.yml` (frontend build env). The admin user
+lives in Citadel; nothing to create here.
 
 ## Appendix: local-environment options considered but not adopted
 

@@ -106,7 +106,7 @@ jobs:
           aws-region: ${{ vars.AWS_DEPLOY_REGION || 'sa-east-1' }}
       - run: >
           uv run cdk diff
-          "Backecast-prod-Data" "Backecast-prod-Auth" "Backecast-prod-Api" "Backecast-prod-Pipeline"
+          "Backecast-prod-Data" "Backecast-prod-Api" "Backecast-prod-WebCert" "Backecast-prod-Web" "Backecast-prod-Pipeline"
 
   frontend:
     needs: changes
