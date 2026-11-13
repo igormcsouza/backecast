@@ -6,9 +6,18 @@
   },
   "context": {
     "account": "693473496042",
+    "citadel": {
+      "user_pool_id": "sa-east-1_f8cv1934P",
+      "client_id": "2dk1r9g97efq0rlsngrh23gsps"
+    },
     "prod": {
       "stage": "prod",
-      "region": "sa-east-1"
+      "region": "sa-east-1",
+      "web": {
+        "domain": "backecast.igormcsouza.com.br",
+        "zone_id": "Z08225582X962VWUN2TWM",
+        "zone_name": "igormcsouza.com.br"
+      }
     }
   }
 }

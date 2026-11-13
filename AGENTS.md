@@ -10,7 +10,7 @@ now delivered and live — see README.md for the architecture diagram and
 current stack. This file now documents ongoing conventions, not a phase
 plan.
 
-Stack: Next.js static export (GitHub Pages) · FastAPI on Lambda (Mangum) ·
+Stack: Next.js static export (S3 + CloudFront) · FastAPI on Lambda (Mangum) ·
 S3 + CloudFront-free direct streaming · DynamoDB · SQS pipeline · Cognito
 (admin auth) · OpenAI transcription (`gpt-4o-mini-transcribe`) + LangChain
 metadata chain · CDK in Python · uv · docker-compose + LocalStack.
@@ -31,12 +31,14 @@ metadata chain · CDK in Python · uv · docker-compose + LocalStack.
 - **Async discipline:** no blocking I/O (incl. plain boto3) inside
   `async def`. Blocking work goes in `def` routes (threadpool) or through
   `run_in_threadpool`.
-- **Admin auth is Cognito**, not a shared secret — see
-  `infra/stacks/auth_stack.py` and `backend/app/core/auth.py`. No
-  self-registration anywhere; the single admin user is created by hand in
-  the Cognito console. `AUTH_STUB=1`/`NEXT_PUBLIC_AUTH_STUB=1` bypass real
-  Cognito for local dev and the E2E suite only (LocalStack Community has no
-  Cognito) — never set for a real deploy.
+- **Admin auth is Citadel**, Igor's shared SSO hub (a Cognito pool owned by the
+  `citadel` repo; this app is registered in its `config/apps.json`), not a shared
+  secret: the admin page does the code flow + PKCE in the browser
+  (`frontend/lib/auth.ts`), the backend verifies the access token against the
+  pool's JWKS (`backend/app/core/auth.py`). This repo creates no user pool and
+  no users. `AUTH_STUB=1`/`NEXT_PUBLIC_AUTH_STUB=1` bypass it for local dev and
+  the E2E suite only (LocalStack Community has no Cognito) — never set for a
+  real deploy.
 - When teaching or explaining changes touching the async pipeline
   (idempotency, DLQ, visibility timeout, at-least-once delivery), explain
   the "why", not just the "what" — these are deliberate design choices,
@@ -95,7 +97,6 @@ infra/
 ├── app.py                 # CDK entrypoint: instantiates stacks per stage
 ├── stacks/
 │   ├── data_stack.py       # media bucket, DynamoDB table
-│   ├── auth_stack.py       # Cognito User Pool + client (admin auth)
 │   ├── api_stack.py        # API Lambda, API Gateway HTTP API
 │   └── pipeline_stack.py   # SQS queue + DLQ, worker Lambda, S3 notifications
 └── tests/                  # CDK assertions tests (Template.from_stack)

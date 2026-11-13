@@ -1,6 +1,7 @@
-"""Cognito-backed admin auth: verifies a Bearer access token against the
-admin User Pool's public JWKS (`infra/stacks/auth_stack.py`) on every
-admin request.
+"""Citadel-backed admin auth: verifies a Bearer access token against the
+Citadel User Pool's public JWKS on every admin request. The token must have
+been issued to this app's own Citadel client (`client_id` claim), so tokens
+Citadel issues to other apps are refused here.
 
 `AUTH_STUB=1` (settings.auth_stub, same shape as AI_STUB elsewhere in this
 app): skip real Cognito verification and accept one well-known bearer
@@ -87,5 +88,8 @@ async def require_admin_key(
     except (jwt.InvalidTokenError, AdminAuthError, KeyError):
         raise AdminAuthError() from None
 
-    if claims.get("token_use") != "access" or claims.get("client_id") != settings.cognito_client_id:
+    if (
+        claims.get("token_use") != "access"
+        or claims.get("client_id") != settings.cognito_client_id
+    ):
         raise AdminAuthError()

@@ -54,7 +54,7 @@ function ReviewEditor() {
   useEffect(() => {
     // Deferred a tick (see react-hooks/set-state-in-effect) rather than
     // calling setToken() synchronously here.
-    Promise.resolve().then(() => setToken(getStoredToken()));
+    getStoredToken().then(setToken);
   }, []);
 
   useEffect(() => {

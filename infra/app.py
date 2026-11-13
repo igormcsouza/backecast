@@ -3,9 +3,9 @@ import aws_cdk as cdk
 from aws_cdk import Tags
 
 from stacks.api_stack import ApiStack
-from stacks.auth_stack import AuthStack
 from stacks.data_stack import DataStack
 from stacks.pipeline_stack import PipelineStack
+from stacks.web_stack import WebCertStack, WebStack
 
 app = cdk.App()
 
@@ -25,16 +25,34 @@ if ctx is None:
 env = cdk.Environment(account=app.node.try_get_context("account"), region=ctx["region"])
 
 data_stack = DataStack(app, f"Backecast-{stage}-Data", stage=stage, env=env)
-auth_stack = AuthStack(app, f"Backecast-{stage}-Auth", stage=stage, env=env)
+# Admin sign-in is Citadel (the shared SSO pool, owned by the `citadel` repo; this app is registered in its
+# config/apps.json). Nothing here creates a user pool any more.
+citadel = app.node.try_get_context("citadel")
 ApiStack(
     app,
     f"Backecast-{stage}-Api",
     stage=stage,
     table=data_stack.table,
     bucket=data_stack.media_bucket,
-    user_pool_id=auth_stack.user_pool.user_pool_id,
-    user_pool_client_id=auth_stack.user_pool_client.user_pool_client_id,
+    user_pool_id=citadel["user_pool_id"],
+    user_pool_client_id=citadel["client_id"],
     env=env,
+)
+web = ctx["web"]
+web_cert = WebCertStack(
+    app,
+    f"Backecast-{stage}-WebCert",
+    **web,
+    env=cdk.Environment(account=env.account, region="us-east-1"),
+    cross_region_references=True,
+)
+WebStack(
+    app,
+    f"Backecast-{stage}-Web",
+    **web,
+    cert=web_cert.cert,
+    env=env,
+    cross_region_references=True,
 )
 PipelineStack(
     app,

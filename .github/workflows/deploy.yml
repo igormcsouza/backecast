@@ -16,15 +16,10 @@
 #    GitHub OIDC federation instead; switched back for consistency across
 #    projects.)
 #
-# 2. deploy-frontend is the deliberate contrast case within AWS-vs-not: it
-#    needs *no* AWS credentials for the actual publish step — GitHub Pages
-#    isn't AWS, so `actions/deploy-pages` talks to GitHub's own Pages API
-#    using GitHub's own separate OIDC token (that's what deploy-frontend's
-#    `id-token: write` is for — a GitHub<->GitHub exchange, unrelated to
-#    AWS auth). It does still need read-only AWS access to fetch the
-#    already-deployed API URL when only frontend files changed (see the
-#    `changes` job below) — that one AWS call is the only AWS-shaped thing
-#    in that job.
+# 2. deploy-frontend builds the static export and publishes it to the Web
+#    stack's S3 bucket (served by CloudFront on backecast.igormcsouza.com.br).
+#    It reads the API URL from the Api stack's output when only frontend
+#    files changed (see the `changes` job below).
 #
 # 3. Path-based gating (the `changes` job below): a push that only touches
 #    `frontend/` shouldn't trigger a backend CDK deploy, a push that only
@@ -131,7 +126,7 @@ jobs:
       # a human who was never going to be there to answer.
       - run: >
           uv run cdk deploy
-          "Backecast-prod-Data" "Backecast-prod-Auth" "Backecast-prod-Api" "Backecast-prod-Pipeline"
+          "Backecast-prod-Data" "Backecast-prod-Api" "Backecast-prod-WebCert" "Backecast-prod-Web" "Backecast-prod-Pipeline"
           --require-approval never
 
   # See header comment (2). Reads the API URL directly from the Api
@@ -147,11 +142,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pages: write
-      id-token: write # GitHub's own Pages OIDC token — not AWS's, see header comment (2)
     environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      name: production
     steps:
       - uses: actions/checkout@v4
         with:
@@ -172,15 +164,6 @@ jobs:
             --output text)
           echo "value=$URL" >> "$GITHUB_OUTPUT"
 
-      - name: Read the Cognito User Pool client id from the Auth stack's CfnOutput
-        id: cognito
-        run: |
-          CLIENT_ID=$(aws cloudformation describe-stacks \
-            --stack-name Backecast-prod-Auth \
-            --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue" \
-            --output text)
-          echo "client_id=$CLIENT_ID" >> "$GITHUB_OUTPUT"
-
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -191,21 +174,23 @@ jobs:
 
       # NEXT_PUBLIC_API_URL is read by lib/api.ts at build time and inlined
       # into the static export's client bundle (see frontend/.env.example).
-      # NEXT_BASE_PATH=/backecast is Phase 6's existing GitHub Pages
-      # subpath convention (see frontend/next.config.ts's docstring) —
-      # this is the one place that actually sets it for a real deploy;
-      # local dev and the e2e Docker build both leave it unset.
+      # No base path: the site is served from the root of its own domain.
       - run: npm run build
         working-directory: frontend
         env:
           NEXT_PUBLIC_API_URL: ${{ steps.api_url.outputs.value }}
-          NEXT_PUBLIC_COGNITO_CLIENT_ID: ${{ steps.cognito.outputs.client_id }}
-          NEXT_PUBLIC_COGNITO_REGION: ${{ vars.AWS_DEPLOY_REGION || 'sa-east-1' }}
-          NEXT_BASE_PATH: /backecast
+          # Citadel (SSO hub): public identifiers, not secrets. Client id = `ClientId-backecast` output of its stack.
+          NEXT_PUBLIC_OIDC_AUTHORITY: https://cognito-idp.sa-east-1.amazonaws.com/sa-east-1_f8cv1934P
+          NEXT_PUBLIC_OIDC_CLIENT_ID: 2dk1r9g97efq0rlsngrh23gsps
+          NEXT_PUBLIC_OIDC_HOSTED_UI: https://sso.citadel.igormcsouza.com.br
 
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: frontend/out
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      # Upload the static export to the Web stack's private bucket, then drop CloudFront's cache.
+      # Hashed assets under _next/ never change, so they cache for a year; every page revalidates.
+      - name: Publish to S3 + CloudFront
+        run: |
+          out() { aws cloudformation describe-stacks --stack-name Backecast-prod-Web \
+            --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue" --output text; }
+          BUCKET=$(out BucketName)
+          aws s3 sync frontend/out "s3://$BUCKET" --delete --exclude "_next/*" --cache-control "no-cache"
+          aws s3 sync frontend/out/_next "s3://$BUCKET/_next" --delete --cache-control "public,max-age=31536000,immutable"
+          aws cloudfront create-invalidation --distribution-id "$(out DistributionId)" --paths "/*"

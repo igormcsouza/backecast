@@ -13,7 +13,7 @@ import {
   uploadToPresignedPost,
 } from "@/lib/api";
 import { computeAdminStats } from "@/lib/adminStats";
-import { clearStoredToken, getStoredToken, setStoredToken, login } from "@/lib/auth";
+import { finishLogin, getStoredToken, isStub, logout, startLogin, stubLogin } from "@/lib/auth";
 import { formatDurationHours, formatRelativeTime } from "@/lib/format";
 import type { Episode, EpisodeStatus } from "@/lib/types";
 
@@ -59,39 +59,37 @@ export default function AdminPage() {
   const [loginError, setLoginError] = useState<string | null>(null);
 
   useEffect(() => {
-    const stored = getStoredToken();
-    if (!stored) {
-      // Deferred a tick rather than a synchronous setState call here (see
-      // react-hooks/set-state-in-effect).
-      Promise.resolve().then(() => setCheckingToken(false));
-      return;
-    }
-    listAdminEpisodes(stored)
-      .then(() => setToken(stored))
-      .catch(() => {
-        clearStoredToken();
-        setLoginError("Your session expired — please sign in again.");
+    finishLogin()
+      .then(async (error) => {
+        if (error) return setLoginError(error);
+        const stored = await getStoredToken();
+        if (!stored) return;
+        try {
+          await listAdminEpisodes(stored);
+          setToken(stored);
+        } catch {
+          await logout();
+          setLoginError("Your session expired - please sign in again.");
+        }
       })
       .finally(() => setCheckingToken(false));
   }, []);
 
-  async function handleLogin(event: React.FormEvent) {
+  function handleLogin(event: React.FormEvent) {
     event.preventDefault();
     setLoginError(null);
     try {
-      const accessToken = await login(username, password);
-      setStoredToken(accessToken);
-      setToken(accessToken);
+      setToken(stubLogin(username, password));
     } catch (err) {
       setLoginError(err instanceof Error ? err.message : "Sign in failed.");
     }
   }
 
   function handleLogout() {
-    clearStoredToken();
     setToken(null);
     setUsername("");
     setPassword("");
+    void logout();
   }
 
   if (checkingToken) {
@@ -112,40 +110,50 @@ export default function AdminPage() {
             </p>
           </div>
 
-          <form onSubmit={handleLogin} className="mt-5 flex flex-col gap-3">
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-text-muted">Username</span>
-              <input
-                type="text"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                placeholder="Username"
-                autoComplete="username"
-                className="rounded-lg border border-border-strong bg-surface-2 px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
-                autoFocus
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-text-muted">Password</span>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Password"
-                autoComplete="current-password"
-                className="rounded-lg border border-border-strong bg-surface-2 px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
-              />
-            </label>
+          {isStub ? (
+            <form onSubmit={handleLogin} className="mt-5 flex flex-col gap-3">
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-text-muted">Username</span>
+                <input
+                  type="text"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="Username"
+                  autoComplete="username"
+                  className="rounded-lg border border-border-strong bg-surface-2 px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
+                  autoFocus
+                />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-xs font-medium text-text-muted">Password</span>
+                <input
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  placeholder="Password"
+                  autoComplete="current-password"
+                  className="rounded-lg border border-border-strong bg-surface-2 px-3 py-2 text-sm text-text focus:border-accent focus:outline-none"
+                />
+              </label>
+              <button
+                type="submit"
+                className="mt-2 rounded-lg bg-accent px-3 py-2 text-sm font-medium text-bg transition hover:bg-accent-strong"
+              >
+                Sign in
+              </button>
+            </form>
+          ) : (
             <button
-              type="submit"
-              className="mt-2 rounded-lg bg-accent px-3 py-2 text-sm font-medium text-bg transition hover:bg-accent-strong"
+              type="button"
+              onClick={() => void startLogin()}
+              className="mt-5 w-full rounded-lg bg-accent px-3 py-2 text-sm font-medium text-bg transition hover:bg-accent-strong"
             >
-              Sign in
+              Sign in with Citadel
             </button>
-          </form>
+          )}
           {loginError && <p className="mt-3 text-sm text-danger">{loginError}</p>}
           <p className="mt-4 text-center text-[11px] text-text-muted">
-            Single admin account — managed in Cognito.
+            Single admin account, signed in through Citadel.
           </p>
         </div>
       </div>
